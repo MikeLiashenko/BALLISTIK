@@ -95,6 +95,8 @@ func show_vehicle(type_id: String, team: int) -> void:
 		_props = parts["props"]
 		for d: Node3D in parts["prop_discs"]:
 			d.visible = false
+		for f: Node3D in parts["afterburners"]:
+			f.visible = false
 	else:
 		match type_id:
 			"spaag":

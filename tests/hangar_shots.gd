@@ -57,7 +57,7 @@ func _next() -> void:
 	if GameDB.is_aircraft(t):
 		var parts := AircraftBuilder.build(t, team)
 		model = parts["root"]
-		for d in parts["prop_discs"]:
+		for d in parts["prop_discs"] + parts["afterburners"]:
 			(d as Node3D).visible = false
 	else:
 		match t:
