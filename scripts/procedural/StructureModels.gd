@@ -74,6 +74,18 @@ static func build(kind: String, team: int, variant: int = 0) -> Dictionary:
 	return {"root": root, "spin": spin}
 
 
+## Меш жилого дома (варианты 0..3) — для декоративных посёлков (MultiMesh).
+static func house_mesh(variant: int) -> Mesh:
+	var key := "structure_house_-1_%d" % (variant % 4)
+	var mesh := MeshFactory.cached_mesh(key)
+	if mesh == null:
+		var b := ModelBuilder.new()
+		_build_static(b, "house", GameDB.NEUTRAL, variant)
+		mesh = b.build()
+		MeshFactory.store_mesh(key, mesh)
+	return mesh
+
+
 static func _build_static(b: ModelBuilder, kind: String, team: int, variant: int) -> void:
 	var dark := MeshFactory.mat(Color(0.12, 0.12, 0.13), 0.7, 0.2)
 	match kind:

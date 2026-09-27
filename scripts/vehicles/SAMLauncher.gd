@@ -12,6 +12,8 @@ const LOCK_CONE := 16.0
 var missiles: Weapon
 var lock_target: Vehicle = null
 var lock_progress: float = 0.0
+## Множитель времени захвата (боты на лёгких уровнях захватывают дольше).
+var lock_time_scale: float = 1.0
 
 var _launcher: Node3D = null
 var _missile_nodes: Array[Node3D] = []
@@ -96,7 +98,7 @@ func _update_lock(delta: float) -> void:
 			lock_progress = 0.0
 	if lock_target != null:
 		var before := lock_progress
-		lock_progress = minf(lock_progress + delta / LOCK_TIME, 1.0)
+		lock_progress = minf(lock_progress + delta / (LOCK_TIME * lock_time_scale), 1.0)
 		if is_player:
 			_beep_timer -= delta
 			if lock_progress >= 1.0 and before < 1.0:

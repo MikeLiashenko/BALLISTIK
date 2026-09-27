@@ -56,9 +56,14 @@ static func particle_quad(additive: bool) -> QuadMesh:
 	if additive:
 		m.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
 	m.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+	m.particles_anim_h_frames = 1
+	m.particles_anim_v_frames = 1
 	m.vertex_color_use_as_albedo = true
-	m.albedo_texture = soft_texture()
+	m.albedo_texture = ProcTextures.smoke_puff()
 	m.disable_receive_shadows = true
+	if not additive:
+		m.proximity_fade_enabled = true
+		m.proximity_fade_distance = 3.0
 	var q := QuadMesh.new()
 	q.size = Vector2(1.0, 1.0)
 	q.material = m
@@ -159,6 +164,17 @@ static func _smoke_burst(sf: float, key: String) -> ParticleProcessMaterial:
 	})
 
 
+## Медленно поднимающийся столб дыма после мощного взрыва.
+static func _smoke_column(sf: float, key: String) -> ParticleProcessMaterial:
+	return _process_mat("column_" + key, {
+		"emit_radius": 3.0 * sf, "direction": Vector3.UP, "spread": 14.0, "vel_min": 4.0 * sf, "vel_max": 9.0 * sf,
+		"gravity": Vector3(1.5, 1.2, 0.6), "damping": 0.4, "scale_min": 6.0 * sf, "scale_max": 11.0 * sf,
+		"scale_curve": [Vector2(0.0, 0.4), Vector2(1.0, 1.6)],
+		"colors": [Color(0.1, 0.09, 0.08, 0.0), Color(0.12, 0.11, 0.1, 0.75), Color(0.3, 0.29, 0.28, 0.45), Color(0.45, 0.45, 0.45, 0.0)],
+		"offsets": [0.0, 0.1, 0.55, 1.0],
+	})
+
+
 static func _sparks(sf: float, key: String) -> ParticleProcessMaterial:
 	return _process_mat("sparks_" + key, {
 		"emit_radius": 0.8 * sf, "spread": 180.0, "vel_min": 18.0 * sf, "vel_max": 42.0 * sf,
@@ -240,20 +256,17 @@ static func explosion(pos: Vector3, radius: float, over_water: bool = false, sou
 	var bucket := 0 if radius < 8.0 else (1 if radius < 24.0 else 2)
 	var sf: float = [0.5, 1.0, 2.0][bucket]
 	var key := str(bucket)
-	# Огненный шар
+	# Вспышка ядра: яркая сфера на доли секунды
 	var ball := MeshInstance3D.new()
 	ball.mesh = MeshFactory.sphere(1.0, -1.0, 16, 8)
-	var ball_mat := MeshFactory.fade_material(Color(1.0, 0.62, 0.25, 1.0), true)
-	ball_mat.emission_enabled = true
-	ball_mat.emission = Color(1.0, 0.5, 0.15)
-	ball_mat.emission_energy_multiplier = 3.0
+	var ball_mat := MeshFactory.fade_material(Color(1.0, 0.85, 0.55, 1.0), true)
 	ball.material_override = ball_mat
 	ball.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	root.add_child(ball)
-	ball.scale = Vector3.ONE * radius * 0.2
+	ball.scale = Vector3.ONE * radius * 0.25
 	var tw := ball.create_tween()
-	tw.tween_property(ball, "scale", Vector3.ONE * radius * 0.8, 0.3).set_trans(Tween.TRANS_EXPO).set_ease(Tween.EASE_OUT)
-	tw.parallel().tween_property(ball_mat, "albedo_color:a", 0.0, 0.55).set_delay(0.1)
+	tw.tween_property(ball, "scale", Vector3.ONE * radius * 0.55, 0.12).set_ease(Tween.EASE_OUT)
+	tw.parallel().tween_property(ball_mat, "albedo_color:a", 0.0, 0.16)
 	tw.tween_callback(ball.queue_free)
 	# Вспышка света
 	if GameSettings.quality >= 1 and _lights < 6:
@@ -269,10 +282,14 @@ static func explosion(pos: Vector3, radius: float, over_water: bool = false, sou
 			Effects._lights -= 1
 			light.queue_free()
 		)
-	# Частицы
-	root.add_child(_particles(_fire_burst(sf, key), 22, 0.9, true, true, 1.0))
-	root.add_child(_particles(_smoke_burst(sf, key), 14, 3.6, true, false, 0.85))
-	root.add_child(_particles(_sparks(sf, key), 26, 1.3, true, true, 1.0))
+	# Частицы: огненный шар из клубов, дым, искры
+	root.add_child(_particles(_fire_burst(sf, key), 34, 1.0, true, true, 0.95))
+	root.add_child(_particles(_smoke_burst(sf, key), 26, 4.5, true, false, 0.8))
+	root.add_child(_particles(_sparks(sf, key), 30, 1.3, true, true, 1.0))
+	if radius >= 14.0 and not over_water:
+		var column := _particles(_smoke_column(sf, key), 30, 9.0, true, false, 0.35)
+		column.visibility_aabb = AABB(Vector3(-200.0, -50.0, -200.0), Vector3(400.0, 400.0, 400.0))
+		root.add_child(column)
 	if over_water:
 		root.add_child(_particles(_splash_column(sf, key), 34, 2.4, true, false, 0.9))
 		_ring(root, radius * 0.4, radius * 2.2, Color(0.9, 0.97, 1.0, 0.7), 1.4, false)
@@ -282,7 +299,7 @@ static func explosion(pos: Vector3, radius: float, over_water: bool = false, sou
 			_scorch(pos, radius)
 	if radius >= 18.0:
 		_ring(root, radius * 0.3, radius * 2.6, Color(1.0, 0.75, 0.45, 0.8), 0.6, true)
-	_auto_free(root, 4.5)
+	_auto_free(root, 10.0 if radius >= 14.0 else 5.0)
 	if sound:
 		var snd := "explosion_big" if radius >= 20.0 else ("explosion" if radius >= 6.0 else "flak")
 		SoundFX.play_3d(snd, pos, 4.0 if radius >= 20.0 else 0.0, 1.0, 45.0 + radius * 2.0)
@@ -316,20 +333,21 @@ static func _scorch(pos: Vector3, radius: float) -> void:
 	var ground := level.terrain.get_height(pos.x, pos.z)
 	if ground < 0.2 or absf(pos.y - ground) > radius:
 		return
-	var decal := MeshInstance3D.new()
-	decal.mesh = MeshFactory.cylinder(1.0, 1.0, 0.05, 18)
-	var m := MeshFactory.fade_material(Color(0.04, 0.035, 0.03, 0.75), false, false)
-	m.roughness = 1.0
-	decal.material_override = m
-	decal.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var decal := Decal.new()
+	decal.name = "Scorch"
+	decal.texture_albedo = ProcTextures.scorch()
+	var d := radius * 1.3
+	decal.size = Vector3(d, radius * 1.2 + 6.0, d)
+	decal.albedo_mix = 0.9
+	decal.normal_fade = 0.2
+	decal.cull_mask = 1
+	decal.rotation = Vector3(0.0, randf() * TAU, 0.0)
 	parent.add_child(decal)
-	var n := level.terrain.get_normal(pos.x, pos.z)
-	decal.global_transform = Transform3D(Basis(Quaternion(Vector3.UP, n)), Vector3(pos.x, ground + 0.12, pos.z))
-	decal.scale = Vector3(radius * 0.55, 1.0, radius * 0.55)
+	decal.global_position = Vector3(pos.x, ground, pos.z)
 	_scorches += 1
 	var tw := decal.create_tween()
-	tw.tween_interval(22.0)
-	tw.tween_property(m, "albedo_color:a", 0.0, 4.0)
+	tw.tween_interval(26.0)
+	tw.tween_property(decal, "modulate:a", 0.0, 5.0)
 	tw.tween_callback(func() -> void:
 		Effects._scorches -= 1
 		decal.queue_free()
@@ -426,6 +444,23 @@ static func create_trail(kind: String = "small") -> GPUParticles3D:
 	var p := _particles(_trail(kind), 170 if big else 100, 3.4 if big else 2.0, false, false)
 	p.name = "SmokeTrail"
 	p.visibility_aabb = AABB(Vector3(-800.0, -800.0, -800.0), Vector3(1600.0, 1600.0, 1600.0))
+	return p
+
+
+## Инверсионный след на большой высоте (vortex = false) или срывающийся с законцовок вихрь при перегрузке.
+static func create_contrail(vortex: bool) -> GPUParticles3D:
+	var key := "contrail_vortex" if vortex else "contrail"
+	var mat := _process_mat(key, {
+		"emit_radius": 0.08, "spread": 180.0, "vel_min": 0.0, "vel_max": 0.3,
+		"gravity": Vector3.ZERO, "damping": 0.0,
+		"scale_min": 0.35 if vortex else 1.2, "scale_max": 0.55 if vortex else 2.0,
+		"scale_curve": [Vector2(0.0, 0.4), Vector2(1.0, 1.0 if vortex else 2.4)],
+		"colors": [Color(1.0, 1.0, 1.0, 0.0), Color(1.0, 1.0, 1.0, 0.45 if vortex else 0.55), Color(1.0, 1.0, 1.0, 0.0)],
+		"offsets": [0.0, 0.08, 1.0],
+	})
+	var p := _particles(mat, 50 if vortex else 160, 0.6 if vortex else 6.0, false, false)
+	p.name = "Contrail"
+	p.visibility_aabb = AABB(Vector3(-900.0, -900.0, -900.0), Vector3(1800.0, 1800.0, 1800.0))
 	return p
 
 

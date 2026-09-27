@@ -26,11 +26,9 @@ static func get_theme() -> Theme:
 	t.default_font = bold_font()
 	t.default_font_size = 18
 	t.set_color("font_color", "Label", TEXT)
-	t.set_stylebox("normal", "Button", button_style(NEON_DIM, Color(0.03, 0.1, 0.15, 0.9)))
-	t.set_stylebox("hover", "Button", button_style(NEON, Color(0.05, 0.18, 0.25, 0.95), 10))
-	t.set_stylebox("pressed", "Button", button_style(ACCENT, Color(0.12, 0.1, 0.03, 0.95), 12))
-	t.set_stylebox("disabled", "Button", button_style(Color(0.35, 0.4, 0.45, 0.35), Color(0.05, 0.06, 0.07, 0.8)))
-	t.set_stylebox("focus", "Button", button_style(ACCENT, Color(0.0, 0.0, 0.0, 0.0)))
+	var button_styles := _button_states()
+	for state_name: String in button_styles:
+		t.set_stylebox(state_name, "Button", button_styles[state_name])
 	t.set_color("font_color", "Button", TEXT)
 	t.set_color("font_hover_color", "Button", Color(1.0, 1.0, 1.0))
 	t.set_color("font_pressed_color", "Button", ACCENT)
@@ -118,6 +116,27 @@ static func button_style(border: Color, bg: Color, glow: int = 0) -> StyleBoxFla
 	return s
 
 
+static func _button_states(side_margin: float = 18.0) -> Dictionary:
+	var states := {
+		"normal": button_style(NEON_DIM, Color(0.03, 0.1, 0.15, 0.9)),
+		"hover": button_style(NEON, Color(0.05, 0.18, 0.25, 0.95), 10),
+		"pressed": button_style(ACCENT, Color(0.12, 0.1, 0.03, 0.95), 12),
+		"disabled": button_style(Color(0.35, 0.4, 0.45, 0.35), Color(0.05, 0.06, 0.07, 0.8)),
+		"focus": button_style(ACCENT, Color(0.0, 0.0, 0.0, 0.0)),
+	}
+	for s: StyleBoxFlat in states.values():
+		s.content_margin_left = side_margin
+		s.content_margin_right = side_margin
+	return states
+
+
+## Стили кнопки темы с узкими боковыми полями — для вкладок в тесных панелях.
+static func narrow_button(b: Button, side_margin: float = 8.0) -> void:
+	var states := _button_states(side_margin)
+	for state_name: String in states:
+		b.add_theme_stylebox_override(state_name, states[state_name])
+
+
 static func make_label(text: String, font_size: int = 18, color: Color = TEXT, align: HorizontalAlignment = HORIZONTAL_ALIGNMENT_LEFT) -> Label:
 	var l := Label.new()
 	l.text = text
@@ -170,3 +189,61 @@ static func separator(color: Color = NEON_DIM) -> ColorRect:
 	r.color = color
 	r.custom_minimum_size = Vector2(0.0, 2.0)
 	return r
+
+
+# --- Элементы редизайна меню ---------------------------------------------------------------------------
+const GLASS := Color(0.02, 0.05, 0.08, 0.72)
+const GLASS_DARK := Color(0.015, 0.03, 0.05, 0.86)
+
+
+## «Стеклянная» панель меню: полупрозрачный фон, тонкая рамка, мягкая тень.
+static func glass_panel(border: Color = Color(0.4, 0.8, 1.0, 0.22), bg: Color = GLASS) -> StyleBoxFlat:
+	var s := flat(bg, border, 1, 10, 16)
+	s.shadow_color = Color(0.0, 0.0, 0.0, 0.35)
+	s.shadow_size = 14
+	return s
+
+
+## Кнопка главного меню: акцентная полоса слева, при наведении — подсветка.
+static func menu_button(text: String, primary: bool = false, min_size: Vector2 = Vector2(360.0, 58.0)) -> Button:
+	var b := make_button(text, min_size, 24 if primary else 21)
+	b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	var col := ACCENT if primary else NEON
+	for state: String in ["normal", "hover", "pressed", "focus"]:
+		var s := flat(Color(0.02, 0.05, 0.08, 0.55) if state == "normal" else Color(col.r * 0.25, col.g * 0.25, col.b * 0.25, 0.8), Color(col, 0.0), 0, 4, 10)
+		s.border_width_left = 4 if state != "normal" or primary else 2
+		s.border_color = Color(col, 0.95 if state != "normal" or primary else 0.45)
+		s.content_margin_left = 26.0
+		if state == "focus":
+			s.bg_color = Color(0.0, 0.0, 0.0, 0.0)
+		b.add_theme_stylebox_override(state, s)
+	b.add_theme_color_override("font_color", ACCENT if primary else TEXT)
+	b.add_theme_color_override("font_hover_color", Color(1.0, 1.0, 1.0))
+	b.add_theme_color_override("font_focus_color", Color(1.0, 1.0, 1.0))
+	return b
+
+
+## Карточка выбора (карта, техника): выделенная / обычная.
+static func card_style(selected: bool, disabled: bool = false) -> StyleBoxFlat:
+	var border := ACCENT if selected else (Color(0.5, 0.25, 0.25, 0.6) if disabled else Color(0.4, 0.8, 1.0, 0.25))
+	var bg := Color(0.12, 0.09, 0.03, 0.85) if selected else Color(0.02, 0.05, 0.08, 0.7)
+	var s := flat(bg, border, 2 if selected else 1, 8, 10)
+	return s
+
+
+static func section_title(text: String, font_size: int = 15) -> Label:
+	var l := make_label(text, font_size, ACCENT)
+	return l
+
+
+## Горизонтальный градиент затемнения для читаемости текста поверх 3D-фона.
+static func side_gradient(width_px: int = 256) -> GradientTexture2D:
+	var g := Gradient.new()
+	g.set_color(0, Color(0.0, 0.01, 0.02, 0.88))
+	g.set_color(1, Color(0.0, 0.01, 0.02, 0.0))
+	g.add_point(0.45, Color(0.0, 0.01, 0.02, 0.6))
+	var t := GradientTexture2D.new()
+	t.gradient = g
+	t.width = width_px
+	t.height = 4
+	return t

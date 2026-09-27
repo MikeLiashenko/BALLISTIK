@@ -13,3 +13,6 @@
 *.aab binary
 *.exe binary
 *.pck binary
+
+*.mp3 binary
+*.webp binary

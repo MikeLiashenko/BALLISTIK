@@ -1,6 +1,7 @@
 extends Node
 ## Глобальный менеджер боя (Autoload).
-##  * учёт слотов техники по командам — лимит одновременно находящихся на поле юнитов каждого класса;
+##  * выбор карты и эпохи авиации, учёт слотов техники по командам — лимит машин каждого типа
+##    и каждой роли (истребители, ударные, ЗСУ, ЗРК, катера) одновременно на поле боя;
 ##  * участники матча (игрок и боты): выбор слотов в лобби и при возрождении;
 ##  * очки команд, время матча, условия победы, лента событий;
 ##  * спавн и возрождение техники на точках своей базы (аэродром / берег / причал);
@@ -32,6 +33,11 @@ var difficulty: int = 1
 var score_limit: int = 1000
 var time_limit: float = 900.0
 var map_seed: int = 1
+## Выбранная в лобби карта (может быть MapPresets.RANDOM_ID) и фактическая карта текущего боя.
+var map_choice: String = "coast"
+var map_id: String = "coast"
+## Эпоха авиации: 0 — смешанная, 1 — поршневая, 2 — реактивная.
+var air_era: int = 0
 
 var participants: Array[Participant] = []
 var player: Participant = null
@@ -53,6 +59,10 @@ var smoke_vehicle: String = ""
 var smoke_shots_dir: String = ""
 var smoke_tactical: bool = false
 var smoke_human: bool = false
+var smoke_map: String = ""
+## Автотест меню: обход экранов (главный, лобби, ангар) со скриншотами вместо боя.
+var smoke_menu: bool = false
+var _smoke_battle_time: float = 0.0
 var _smoke_tactical_stage: int = 0
 var _smoke_elapsed: float = 0.0
 var _smoke_next_shot: float = 1.0
@@ -82,14 +92,32 @@ func _parse_cmdline() -> void:
 			smoke_tactical = true
 		elif arg == "--smoke-human":
 			smoke_human = true
+		elif arg.begins_with("--smoke-map="):
+			smoke_map = arg.get_slice("=", 1)
+		elif arg == "--smoke-menu":
+			smoke_menu = true
+		elif arg.begins_with("--smoke-era="):
+			air_era = clampi(int(arg.get_slice("=", 1)), 0, 2)
 
 
 func configure_from_settings() -> void:
 	player_team = GameSettings.player_team
-	team_size = clampi(GameSettings.team_size, 2, GameDB.total_slots())
 	difficulty = GameSettings.difficulty
 	score_limit = GameSettings.score_limit
 	time_limit = float(GameSettings.time_limit_min) * 60.0
+	map_choice = GameSettings.map_id
+	if not smoke_test:
+		air_era = GameSettings.air_era
+	elif smoke_map != "":
+		map_choice = smoke_map
+	team_size = clampi(GameSettings.team_size, 2, mini(GameDB.total_slots(air_era), 16))
+
+
+## Половина размера зоны боя текущей карты (м).
+func bounds() -> float:
+	if level != null and is_instance_valid(level) and level.layout != null:
+		return level.layout.bounds
+	return GameDB.MAP_HALF
 
 
 # --- Лобби и участники --------------------------------------------------------------------------------
@@ -106,7 +134,7 @@ func prepare_lobby() -> void:
 	_next_participant_id = 1
 	player = _add_participant("Вы", player_team, true)
 	if smoke_test and smoke_vehicle != "":
-		reserve_slot(player, smoke_vehicle)
+		reserve_slot(player, GameDB.resolve_id(smoke_vehicle))
 	var names: Array = GameDB.BOT_CALLSIGNS.duplicate()
 	names.shuffle()
 	var name_index := 0
@@ -170,8 +198,26 @@ func slot_max(type_id: String) -> int:
 	return GameDB.max_slots(type_id)
 
 
+## Число занятых слотов роли в команде.
+func role_count(team: int, role: String) -> int:
+	var n := 0
+	for t in GameDB.types_with_role(role):
+		n += slot_count(team, t)
+	return n
+
+
+func role_full(team: int, role: String) -> bool:
+	return role_count(team, role) >= int(GameDB.ROLE_LIMITS.get(role, 99))
+
+
+func is_available(type_id: String) -> bool:
+	return GameDB.VEHICLES.has(type_id) and GameDB.in_era(type_id, air_era)
+
+
 func is_slot_free(team: int, type_id: String) -> bool:
-	return slot_count(team, type_id) < slot_max(type_id)
+	if not is_available(type_id):
+		return false
+	return slot_count(team, type_id) < slot_max(type_id) and not role_full(team, GameDB.role_of(type_id))
 
 
 func can_take_slot(p: Participant, type_id: String) -> bool:
@@ -198,13 +244,16 @@ func get_slot_holders(team: int, type_id: String) -> Array[Participant]:
 
 ## Занять слот техники. Возвращает false, если все слоты этого класса в команде заняты.
 func reserve_slot(p: Participant, type_id: String) -> bool:
-	if p == null or not GameDB.VEHICLES.has(type_id):
+	if p == null or not is_available(type_id):
 		return false
 	if p.vehicle_type == type_id:
 		return true
 	if p.has_live_vehicle():
 		return false
-	if not is_slot_free(p.team, type_id):
+	var role := GameDB.role_of(type_id)
+	var same_role := p.vehicle_type != "" and GameDB.role_of(p.vehicle_type) == role
+	var type_free := slot_count(p.team, type_id) < slot_max(type_id)
+	if not type_free or (role_full(p.team, role) and not same_role):
 		return false
 	release_slot(p)
 	var holders: Array = slots[p.team][type_id]
@@ -225,10 +274,39 @@ func release_slot(p: Participant) -> void:
 	roster_changed.emit()
 
 
+## Выбор слота игроком. Если место занято ботом своей команды, бот уступает и выбирает другую технику.
 func request_player_slot(type_id: String) -> bool:
-	if player == null:
+	if player == null or not is_available(type_id):
 		return false
-	return reserve_slot(player, type_id)
+	if reserve_slot(player, type_id):
+		return true
+	if player.has_live_vehicle():
+		return false
+	var role := GameDB.role_of(type_id)
+	var bumped: Participant = null
+	if slot_count(player.team, type_id) >= slot_max(type_id):
+		for p in get_slot_holders(player.team, type_id):
+			if not p.is_player and not p.has_live_vehicle():
+				bumped = p
+				break
+	elif role_full(player.team, role):
+		for t in GameDB.types_with_role(role):
+			for p in get_slot_holders(player.team, t):
+				if not p.is_player and not p.has_live_vehicle():
+					bumped = p
+					break
+			if bumped != null:
+				break
+	if bumped == null:
+		return false
+	release_slot(bumped)
+	if not reserve_slot(player, type_id):
+		return false
+	var alt := BotAI.choose_vehicle_type(self, bumped.team, rng)
+	if alt != "":
+		reserve_slot(bumped, alt)
+	roster_changed.emit()
+	return true
 
 
 # --- Матч -------------------------------------------------------------------------------------------------
@@ -246,6 +324,7 @@ func start_battle() -> void:
 	match_running = false
 	winner = -1
 	map_seed = rng.randi_range(1, 999999)
+	map_id = MapPresets.resolve(map_choice, rng)
 	units.clear()
 	structures.clear()
 	for p in participants:
@@ -270,7 +349,9 @@ func on_level_ready(p_level: BattleLevel) -> void:
 		else:
 			p.respawn_timer = 0.5 if p.is_player else rng.randf_range(1.0, 3.0)
 	match_started.emit()
-	announcement.emit("БОЙ НАЧАЛСЯ · ЛИМИТ %d ОЧКОВ" % score_limit, Color(0.4, 0.95, 1.0))
+	MusicPlayer.play_battle()
+	_smoke_battle_time = 0.0
+	announcement.emit("%s · ЛИМИТ %d ОЧКОВ" % [MapPresets.map_name(map_id).to_upper(), score_limit], Color(0.4, 0.95, 1.0))
 
 
 func spawn_participant(p: Participant) -> Vehicle:
@@ -297,11 +378,11 @@ func spawn_participant(p: Participant) -> Vehicle:
 
 
 static func create_vehicle(type_id: String) -> Vehicle:
+	if GameDB.is_aircraft(type_id):
+		var a := Aircraft.new()
+		a.vehicle_type = type_id
+		return a
 	match type_id:
-		"fighter":
-			return Fighter.new()
-		"bomber":
-			return Bomber.new()
 		"spaag":
 			return AAGun.new()
 		"sam":
@@ -553,20 +634,27 @@ func get_fx_parent() -> Node:
 # --- Автотест ------------------------------------------------------------------------------------------------
 func _smoke_update(delta: float) -> void:
 	_smoke_elapsed += delta
+	if match_running:
+		_smoke_battle_time += delta
 	if match_running and DisplayServer.get_name() != "headless":
 		var fps := float(Engine.get_frames_per_second())
 		smoke_count("fps_samples")
 		smoke_count("fps_sum", fps)
-		if fps > 0.0 and (not smoke_stats.has("fps_min") or fps < float(smoke_stats["fps_min"])) and _smoke_elapsed > 12.0:
+		if fps > 0.0 and (not smoke_stats.has("fps_min") or fps < float(smoke_stats["fps_min"])) and _smoke_battle_time > 6.0:
 			smoke_stats["fps_min"] = fps
-	if smoke_shots_dir != "" and DisplayServer.get_name() != "headless" and _smoke_elapsed >= _smoke_next_shot:
-		_save_screenshot()
-		_smoke_next_shot += 2.4 if _smoke_shot_index <= 1 else 5.0
+	# Скриншоты: первый — в меню, остальные — по времени боя.
+	if smoke_shots_dir != "" and DisplayServer.get_name() != "headless":
+		if _smoke_shot_index == 0 and _smoke_elapsed >= 1.4 and not smoke_menu:
+			_save_screenshot()
+			_smoke_next_shot = 1.5
+		elif _smoke_shot_index > 0 and match_running and _smoke_battle_time >= _smoke_next_shot:
+			_save_screenshot()
+			_smoke_next_shot += 2.5 if _smoke_shot_index <= 2 else 4.5
 	if smoke_tactical and level != null and match_running:
 		_smoke_tactical_director()
 	if smoke_human and level != null and match_running:
 		_smoke_human_input(delta)
-	if _smoke_elapsed >= smoke_seconds:
+	if not smoke_menu and (_smoke_battle_time >= smoke_seconds or _smoke_elapsed > smoke_seconds + 120.0):
 		_print_smoke_summary()
 		get_tree().quit(0)
 
@@ -576,7 +664,7 @@ func _smoke_human_input(delta: float) -> void:
 	var pc := level.player_controller
 	if pc == null or not pc.has_vehicle():
 		return
-	var t := _smoke_elapsed
+	var t := _smoke_battle_time
 	_smoke_hold("move_forward", fmod(t, 6.0) < 4.0)
 	_smoke_hold("move_right", fmod(t, 5.0) < 1.2)
 	_smoke_hold("arrow_down", fmod(t, 8.0) < 0.8)
@@ -600,7 +688,7 @@ func _smoke_tactical_director() -> void:
 	var pc := level.player_controller
 	if pc == null or not pc.has_vehicle() or pc.vehicle.get_special_range() == Vector2.ZERO:
 		return
-	if _smoke_tactical_stage == 0 and _smoke_elapsed > 11.0:
+	if _smoke_tactical_stage == 0 and _smoke_battle_time > 8.0:
 		_smoke_tactical_stage = 1
 		pc.enter_tactical()
 		var r := pc.vehicle.get_special_range()
@@ -618,10 +706,14 @@ func _smoke_tactical_director() -> void:
 			best.y = level.terrain.get_surface_height(best.x, best.z)
 		pc.set_tactical_point(best)
 		print("[SMOKE] tactical target at %s, distance %.0f" % [str(best), GameDB.flat_distance(best, pc.vehicle.global_position)])
-	elif _smoke_tactical_stage == 1 and _smoke_elapsed > 16.4:
+	elif _smoke_tactical_stage == 1 and _smoke_battle_time > 13.4:
 		_smoke_tactical_stage = 2
 		print("[SMOKE] tactical info: ", pc.tactical_info, " valid=", pc.tactical_valid)
 		pc.tactical_launch()
+
+
+func save_screenshot() -> void:
+	_save_screenshot()
 
 
 func _save_screenshot() -> void:
@@ -636,7 +728,7 @@ func _save_screenshot() -> void:
 
 
 func _print_smoke_summary() -> void:
-	print("[SMOKE] elapsed=%.1f s, units alive=%d, structures=%d, score=%d:%d" % [_smoke_elapsed, get_live_units().size(), structures.size(), scores[0], scores[1]])
+	print("[SMOKE] map=%s era=%d elapsed=%.1f s (battle %.1f s), units alive=%d, structures=%d, score=%d:%d" % [map_id, air_era, _smoke_elapsed, _smoke_battle_time, get_live_units().size(), structures.size(), scores[0], scores[1]])
 	for p in participants:
 		print("[SMOKE]   %s team=%d vehicle=%s kills=%d deaths=%d score=%d" % [p.name, p.team, p.vehicle_type, p.kills, p.deaths, p.score])
 	if smoke_stats.has("fps_samples"):

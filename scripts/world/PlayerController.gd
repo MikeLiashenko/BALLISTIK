@@ -112,9 +112,9 @@ func _unhandled_input(event: InputEvent) -> void:
 				MOUSE_BUTTON_RIGHT:
 					exit_tactical()
 				MOUSE_BUTTON_WHEEL_UP:
-					rig.tactical_size = clampf(rig.tactical_size * 0.87, 900.0, 9000.0)
+					rig.tactical_size = clampf(rig.tactical_size * 0.87, 900.0, 18000.0)
 				MOUSE_BUTTON_WHEEL_DOWN:
-					rig.tactical_size = clampf(rig.tactical_size * 1.15, 900.0, 9000.0)
+					rig.tactical_size = clampf(rig.tactical_size * 1.15, 900.0, 18000.0)
 			get_viewport().set_input_as_handled()
 			return
 		if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED and has_vehicle() and hud != null and not hud.is_menu_open():
@@ -431,7 +431,7 @@ func _rebuild_arc(origin: Vector3, in_range: bool) -> void:
 			var p := origin.lerp(tactical_point, k)
 			p.y = lerpf(origin.y, tactical_point.y, k) + sin(k * PI) * 60.0
 			pts.append(p)
-		eta = d / 250.0
+		eta = d / 280.0
 	tactical_valid = true
 	_marker_text = "%s · %.1f с" % [GameDB.format_distance(d), eta]
 	tactical_info = "ЦЕЛЬ: %s · ПОДЛЁТ %.1f с · ПУСК — повторный клик / Enter" % [GameDB.format_distance(d), eta]

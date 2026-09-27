@@ -1,122 +1,130 @@
 class_name Terrain
 extends RefCounted
-## Процедурный рельеф арены: суша, береговая линия, морское дно, острова и выровненные площадки баз.
-## Высоты считаются один раз в регулярную сетку. Запросы высоты используют ту же треугольную
-## интерполяцию, что и визуальный меш, поэтому «физическая» поверхность совпадает с картинкой.
+## Процедурный рельеф карты: форма суши (побережье, архипелаг, залив, фьорды, пролив), холмы и хребты,
+## морское дно, выровненные площадки баз. Высоты считаются один раз в регулярную сетку
+## (TerrainSampler, несколько потоков); запросы высоты используют ту же треугольную интерполяцию,
+## что и меш LOD0, — «физическая» поверхность совпадает с картинкой. Дополнительно строятся маски
+## (леса, поля, вариации климата) для отрисовки и расстановки растительности.
 
-const SEA_FLOOR := -26.0
 const NAVIGABLE_DEPTH := -1.2
 const LAND_HEIGHT := 0.6
+## Больше 4 потоков не даёт выигрыша: вызовы методов объектов движка из потоков сериализуются.
+const MAX_THREADS := 4
 
+var layout: MapLayout = null
+var preset: Dictionary = {}
 var seed_value: int = 1
-var half_size: float = GameDB.TERRAIN_HALF
-var resolution: int = 256
+var half_size: float = 13000.0
+var resolution: int = 512
 var cell: float = 1.0
 var heights := PackedFloat32Array()
-var flat_zones: Array[Dictionary] = []
-var islands: Array[Dictionary] = []
+## Маски на узлах сетки (RGBA8): r — лес, g — пригодность под поля, b — сухость/вариация, a — площадка базы.
+var masks := PackedByteArray()
 
-var _hills := FastNoiseLite.new()
-var _ridges := FastNoiseLite.new()
-var _detail := FastNoiseLite.new()
-var _coast := FastNoiseLite.new()
+var _sampler: TerrainSampler = null
 
 
-func _init(p_seed: int = 1, p_resolution: int = 256, p_half_size: float = GameDB.TERRAIN_HALF) -> void:
+func _init(p_layout: MapLayout, p_seed: int = 1, p_resolution: int = 512) -> void:
+	layout = p_layout
+	preset = layout.preset
 	seed_value = p_seed
-	resolution = maxi(p_resolution, 16)
-	half_size = p_half_size
+	resolution = maxi(p_resolution, 32)
+	half_size = layout.world
 	cell = half_size * 2.0 / float(resolution)
-	_setup_noise()
-	_define_islands()
-	flat_zones = MapLayout.flat_zones(self)
-	for zone in flat_zones:
-		if float(zone["height"]) < -500.0:
-			var c := MapLayout.zone_center(zone)
-			zone["height"] = maxf(raw_height(c.x, c.y, false), 2.5)
-	_build_grid()
+	_sampler = TerrainSampler.new(layout, seed_value)
+	layout.build_zones(func(x: float, z: float) -> float: return _sampler.base_height(x, z))
 
 
-func _setup_noise() -> void:
-	_hills.seed = seed_value
-	_hills.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
-	_hills.frequency = 0.0011
-	_hills.fractal_type = FastNoiseLite.FRACTAL_FBM
-	_hills.fractal_octaves = 4
-	_ridges.seed = seed_value + 7
-	_ridges.noise_type = FastNoiseLite.TYPE_SIMPLEX
-	_ridges.frequency = 0.0021
-	_ridges.fractal_type = FastNoiseLite.FRACTAL_RIDGED
-	_ridges.fractal_octaves = 3
-	_detail.seed = seed_value + 17
-	_detail.noise_type = FastNoiseLite.TYPE_SIMPLEX
-	_detail.frequency = 0.012
-	_detail.fractal_octaves = 2
-	_coast.seed = seed_value + 101
-	_coast.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
-	_coast.frequency = 0.0016
-	_coast.fractal_octaves = 3
+## «Естественная» высота рельефа (аналитически, без сетки и площадок).
+func base_height(x: float, z: float) -> float:
+	return _sampler.base_height(x, z)
 
 
-func _define_islands() -> void:
-	islands = [
-		{"center": MapLayout.CENTRAL_ISLAND, "radius": 300.0, "height": 34.0},
-		{"center": Vector2(-1150.0, 1650.0), "radius": 200.0, "height": 24.0},
-		{"center": Vector2(1150.0, 1550.0), "radius": 220.0, "height": 28.0},
-		{"center": Vector2(-450.0, 2550.0), "radius": 150.0, "height": 16.0},
-		{"center": Vector2(650.0, 2750.0), "radius": 130.0, "height": 14.0},
-	]
+func land_signal(x: float, z: float) -> float:
+	return _sampler.land_signal(x, z)
 
 
-## Z-координата береговой линии для данного X (суша при z < coast_z).
-func coast_z(x: float) -> float:
-	return 70.0 * sin(x * 0.0011 + 0.6) + 40.0 * sin(x * 0.0029 + 2.1) + 55.0 * _coast.get_noise_1d(x)
-
-
-## Аналитическая высота рельефа (до дискретизации в сетку).
-func raw_height(x: float, z: float, apply_zones: bool = true) -> float:
-	var d := coast_z(x) - z
-	var h: float
-	if d >= 0.0:
-		h = 1.2 + 6.0 * smoothstep(0.0, 160.0, d)
-		var hill := _hills.get_noise_2d(x, z) * 0.5 + 0.5
-		var ridge := _ridges.get_noise_2d(x, z) * 0.5 + 0.5
-		var inland := smoothstep(120.0, 900.0, d)
-		h += (pow(hill, 1.7) * 150.0 + ridge * 35.0) * inland
-		h += _detail.get_noise_2d(x, z) * 4.0 * smoothstep(40.0, 240.0, d)
-		var edge := maxf(absf(x), -z)
-		h += smoothstep(3050.0, 3700.0, edge) * 380.0 * (0.7 + 0.3 * hill)
-	else:
-		var depth := smoothstep(0.0, 420.0, -d)
-		h = lerpf(1.2, SEA_FLOOR, depth)
-		h += _detail.get_noise_2d(x, z) * 2.5 * depth
-	for isl in islands:
-		var c: Vector2 = isl["center"]
-		var r: float = isl["radius"]
-		var dist := Vector2(x, z).distance_to(c)
-		if dist < r:
-			var k := smoothstep(0.0, 1.0, 1.0 - dist / r)
-			var ih := lerpf(SEA_FLOOR, float(isl["height"]), k) + _detail.get_noise_2d(x * 1.7, z * 1.7) * 3.0 * k
-			h = maxf(h, ih)
-	if apply_zones:
-		for zone in flat_zones:
-			var radius: float = zone["radius"]
-			var falloff: float = zone["falloff"]
-			var zd := MapLayout.zone_distance(zone, Vector2(x, z))
-			var w := 1.0 - smoothstep(radius, radius + falloff, zd)
-			if w > 0.0:
-				h = lerpf(h, float(zone["height"]), w)
-	return h
-
-
-func _build_grid() -> void:
+# --- Генерация сетки -------------------------------------------------------------------------------------
+## Строит сетку высот и масок. Вызывается один раз (можно из фонового потока).
+func generate() -> void:
 	var n1 := resolution + 1
-	heights.resize(n1 * n1)
-	for iz in n1:
-		var z := -half_size + float(iz) * cell
-		for ix in n1:
-			var x := -half_size + float(ix) * cell
-			heights[iz * n1 + ix] = raw_height(x, z)
+	heights = PackedFloat32Array()
+	for part: PackedFloat32Array in _parallel(func(s: TerrainSampler, r0: int, r1: int) -> Variant:
+		return s.height_rows(r0, r1, n1, half_size, cell)
+	):
+		heights.append_array(part)
+	_apply_zones()
+	var zone_mask := _rasterize_zones()
+	var h := heights
+	masks = PackedByteArray()
+	for part: PackedByteArray in _parallel(func(s: TerrainSampler, r0: int, r1: int) -> Variant:
+		return s.mask_rows(r0, r1, n1, half_size, cell, h, zone_mask)
+	):
+		masks.append_array(part)
+
+
+## job(sampler, r0, r1) по диапазонам строк; у каждого потока — свой семплер. Результаты по порядку.
+func _parallel(job: Callable) -> Array:
+	var total := resolution + 1
+	var n := clampi(OS.get_processor_count() - 1, 1, MAX_THREADS)
+	if total < 128:
+		n = 1
+	var per := ceili(float(total) / float(n))
+	var results: Array = []
+	if n == 1:
+		results.append(job.call(_sampler, 0, total))
+		return results
+	var threads: Array[Thread] = []
+	for t in n:
+		var r0 := t * per
+		var r1 := mini(total, r0 + per)
+		if r0 >= r1:
+			break
+		var s := _sampler if t == 0 else TerrainSampler.new(layout, seed_value)
+		var th := Thread.new()
+		th.start(job.bind(s, r0, r1))
+		threads.append(th)
+	for th in threads:
+		results.append(th.wait_to_finish())
+	return results
+
+
+func _apply_zones() -> void:
+	var n1 := resolution + 1
+	for zone in layout.zones:
+		var rect: Rect2 = zone["rect"]
+		var ix0 := clampi(int(floor((rect.position.x + half_size) / cell)), 0, resolution)
+		var ix1 := clampi(int(ceil((rect.end.x + half_size) / cell)), 0, resolution)
+		var iz0 := clampi(int(floor((rect.position.y + half_size) / cell)), 0, resolution)
+		var iz1 := clampi(int(ceil((rect.end.y + half_size) / cell)), 0, resolution)
+		for iz in range(iz0, iz1 + 1):
+			var z := -half_size + float(iz) * cell
+			for ix in range(ix0, ix1 + 1):
+				var i := iz * n1 + ix
+				heights[i] = MapLayout.apply_zone(zone, Vector2(-half_size + float(ix) * cell, z), heights[i])
+
+
+## Растровая маска выровненных площадок (запрет деревьев и полей рядом с базами).
+func _rasterize_zones() -> PackedByteArray:
+	var n1 := resolution + 1
+	var out := PackedByteArray()
+	out.resize(n1 * n1)
+	out.fill(0)
+	for zone in layout.zones:
+		if str(zone["kind"]) != "flat":
+			continue
+		var reach := float(zone["radius"]) + 60.0
+		var rect: Rect2 = zone["rect"]
+		var ix0 := clampi(int(floor((rect.position.x + half_size) / cell)), 0, resolution)
+		var ix1 := clampi(int(ceil((rect.end.x + half_size) / cell)), 0, resolution)
+		var iz0 := clampi(int(floor((rect.position.y + half_size) / cell)), 0, resolution)
+		var iz1 := clampi(int(ceil((rect.end.y + half_size) / cell)), 0, resolution)
+		for iz in range(iz0, iz1 + 1):
+			var z := -half_size + float(iz) * cell
+			for ix in range(ix0, ix1 + 1):
+				if MapLayout.zone_distance(zone, Vector2(-half_size + float(ix) * cell, z)) < reach:
+					out[iz * n1 + ix] = 255
+	return out
 
 
 # --- Запросы высоты -------------------------------------------------------------------------------
@@ -152,6 +160,26 @@ func get_normal(x: float, z: float) -> Vector3:
 	return Vector3(hl - hr, 2.0 * e, hd - hu).normalized()
 
 
+## Маска в точке (билинейно): r — лес, g — поля, b — сухость, a — площадка базы (0..1).
+func get_mask(x: float, z: float) -> Color:
+	var n1 := resolution + 1
+	var gx := clampf((x + half_size) / cell, 0.0, float(resolution) - 0.0001)
+	var gz := clampf((z + half_size) / cell, 0.0, float(resolution) - 0.0001)
+	var ix := int(gx)
+	var iz := int(gz)
+	var fx := gx - float(ix)
+	var fz := gz - float(iz)
+	var c00 := _mask_color((iz * n1 + ix) * 4)
+	var c10 := _mask_color((iz * n1 + ix + 1) * 4)
+	var c01 := _mask_color(((iz + 1) * n1 + ix) * 4)
+	var c11 := _mask_color(((iz + 1) * n1 + ix + 1) * 4)
+	return c00.lerp(c10, fx).lerp(c01.lerp(c11, fx), fz)
+
+
+func _mask_color(i: int) -> Color:
+	return Color(masks[i] / 255.0, masks[i + 1] / 255.0, masks[i + 2] / 255.0, masks[i + 3] / 255.0)
+
+
 func is_land(x: float, z: float) -> bool:
 	return get_height(x, z) > LAND_HEIGHT
 
@@ -161,7 +189,7 @@ func is_water(x: float, z: float) -> bool:
 
 
 func is_navigable(x: float, z: float, margin: float = 0.0) -> bool:
-	if absf(x) > GameDB.MAP_HALF + 150.0 or absf(z) > GameDB.MAP_HALF + 150.0:
+	if not layout.in_bounds(x, z, 150.0):
 		return false
 	if get_height(x, z) > NAVIGABLE_DEPTH:
 		return false
@@ -194,101 +222,46 @@ func raycast(origin: Vector3, direction: Vector3, max_distance: float, include_w
 					lo = mid
 			return {"hit": true, "position": origin + d * hi, "distance": hi}
 		t = next_t
-		step = clampf(t * 0.015, 6.0, 30.0)
+		step = clampf(t * 0.015, 6.0, 40.0)
 	return {"hit": false, "position": origin + d * max_distance, "distance": max_distance}
 
 
 ## Прямая видимость между точками (рельеф заслоняет, вода — нет).
 func line_of_sight(a: Vector3, b: Vector3, clearance: float = 1.5) -> bool:
 	var dist := a.distance_to(b)
-	var steps := clampi(int(dist / 50.0), 2, 90)
+	var steps := clampi(int(dist / 60.0), 2, 120)
 	for i in range(1, steps):
-		var p := a.lerp(b, float(i) / float(steps))
-		if p.y < get_height(p.x, p.z) + clearance:
+		var q := a.lerp(b, float(i) / float(steps))
+		if q.y < get_height(q.x, q.z) + clearance:
 			return false
 	return true
 
 
-# --- Визуальный меш -------------------------------------------------------------------------------
-func build_mesh(material: Material) -> ArrayMesh:
-	var n1 := resolution + 1
-	var count := n1 * n1
-	var verts := PackedVector3Array()
-	var normals := PackedVector3Array()
-	var colors := PackedColorArray()
-	verts.resize(count)
-	normals.resize(count)
-	colors.resize(count)
-	for iz in n1:
-		for ix in n1:
-			var i := iz * n1 + ix
-			var x := -half_size + float(ix) * cell
-			var z := -half_size + float(iz) * cell
-			var h := heights[i]
-			verts[i] = Vector3(x, h, z)
-			var hl := heights[iz * n1 + maxi(ix - 1, 0)]
-			var hr := heights[iz * n1 + mini(ix + 1, resolution)]
-			var hd := heights[maxi(iz - 1, 0) * n1 + ix]
-			var hu := heights[mini(iz + 1, resolution) * n1 + ix]
-			var n := Vector3(hl - hr, 2.0 * cell, hd - hu).normalized()
-			normals[i] = n
-			colors[i] = _color_for(x, z, h, n.y)
-	var indices := PackedInt32Array()
-	indices.resize(resolution * resolution * 6)
-	var k := 0
-	for iz in resolution:
-		for ix in resolution:
-			var i00 := iz * n1 + ix
-			var i10 := i00 + 1
-			var i01 := i00 + n1
-			var i11 := i01 + 1
-			indices[k] = i00
-			indices[k + 1] = i10
-			indices[k + 2] = i11
-			indices[k + 3] = i00
-			indices[k + 4] = i11
-			indices[k + 5] = i01
-			k += 6
-	var arrays := []
-	arrays.resize(Mesh.ARRAY_MAX)
-	arrays[Mesh.ARRAY_VERTEX] = verts
-	arrays[Mesh.ARRAY_NORMAL] = normals
-	arrays[Mesh.ARRAY_COLOR] = colors
-	arrays[Mesh.ARRAY_INDEX] = indices
-	var mesh := ArrayMesh.new()
-	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	mesh.surface_set_material(0, material)
-	return mesh
-
-
-func _color_for(x: float, z: float, h: float, ny: float) -> Color:
-	var v := _detail.get_noise_2d(x * 0.35, z * 0.35) * 0.5 + 0.5
-	if h < -3.0:
-		return Color(0.16, 0.2, 0.2).lerp(Color(0.25, 0.27, 0.23), v)
-	if h < 3.2:
-		return Color(0.55, 0.51, 0.39).lerp(Color(0.63, 0.59, 0.46), v)
-	var c := Color(0.14, 0.22, 0.11).lerp(Color(0.23, 0.3, 0.15), v)
-	var rock := clampf((0.86 - ny) * 5.0, 0.0, 1.0)
-	rock = maxf(rock, smoothstep(140.0, 190.0, h))
-	c = c.lerp(Color(0.33, 0.32, 0.3), rock)
-	return c.lerp(Color(0.86, 0.88, 0.92), smoothstep(230.0, 300.0, h))
+## Карта высот для шейдеров (R16F, (resolution+1)²): глубина у берега, пена, отмели.
+func height_image() -> Image:
+	var img := Image.create_from_data(resolution + 1, resolution + 1, false, Image.FORMAT_RF, heights.to_byte_array())
+	img.convert(Image.FORMAT_RH)
+	return img
 
 
 # --- Случайные точки для ИИ и декораций ------------------------------------------------------------
-func random_land_point(rng: RandomNumberGenerator, min_h: float, max_h: float, bounds: float = GameDB.MAP_HALF, max_tries: int = 40) -> Vector3:
+func random_land_point(rng: RandomNumberGenerator, min_h: float, max_h: float, bounds: float = -1.0, max_tries: int = 60) -> Vector3:
+	var b := layout.bounds if bounds <= 0.0 else bounds
 	for i in max_tries:
-		var x := rng.randf_range(-bounds, bounds)
-		var z := rng.randf_range(-bounds, bounds)
+		var x := rng.randf_range(-b, b)
+		var z := rng.randf_range(-b, b)
 		var h := get_height(x, z)
 		if h >= min_h and h <= max_h:
 			return Vector3(x, h, z)
-	return Vector3(0.0, get_height(0.0, -1000.0), -1000.0)
+	var hq := layout.hq[0]
+	return Vector3(hq.x, get_height(hq.x, hq.y), hq.y)
 
 
-func random_sea_point(rng: RandomNumberGenerator, x_min: float, x_max: float, z_min: float, z_max: float, max_tries: int = 40) -> Vector3:
+func random_sea_point(rng: RandomNumberGenerator, x_min: float, x_max: float, z_min: float, z_max: float, max_tries: int = 60) -> Vector3:
 	for i in max_tries:
 		var x := rng.randf_range(x_min, x_max)
 		var z := rng.randf_range(z_min, z_max)
 		if is_navigable(x, z, 60.0):
 			return Vector3(x, 0.0, z)
-	return Vector3(0.0, 0.0, 1800.0)
+	var w := layout.warship[0]
+	return Vector3(w.x, 0.0, w.y)

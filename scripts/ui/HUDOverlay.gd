@@ -39,7 +39,11 @@ func _project(p: Vector3) -> Variant:
 	var cam := _cam()
 	if cam == null or cam.is_position_behind(p):
 		return null
-	return cam.unproject_position(p)
+	var sp := cam.unproject_position(p)
+	# Точки у плоскости камеры проецируются в огромные координаты — такие отбрасываем.
+	if not sp.is_finite() or absf(sp.x) > 20000.0 or absf(sp.y) > 20000.0:
+		return null
+	return sp
 
 
 func _draw() -> void:
@@ -102,8 +106,8 @@ func _draw() -> void:
 				else:
 					draw_string(_font, p + Vector2(-s, -s - 8.0), "ЗАХВАТ", HORIZONTAL_ALIGNMENT_LEFT, -1.0, 14, col)
 	# CCIP бомбардировщика
-	if v is Bomber:
-		var bomber := v as Bomber
+	if v is Aircraft and (v as Aircraft).show_ccip():
+		var bomber := v as Aircraft
 		if bomber.ccip_valid:
 			var cp: Variant = _project(bomber.ccip_point)
 			if cp != null:

@@ -1,42 +1,57 @@
 # BALLISTIK
 
-Тактический 3D-экшен на **Godot 4.7.2** (GDScript): авиация, наземная ПВО и военный флот сражаются на одной
-процедурной арене «суша — береговая линия — море». Одиночный режим: игрок и боты своей команды против команды ботов.
+Тактический 3D-экшен на **Godot 4.7.2** (GDScript): авиация от поршневых истребителей 1940-х до реактивных
+машин, наземная ПВО и военный флот сражаются на больших процедурных картах. Одиночный режим: игрок и боты
+своей команды против команды ботов.
 
-> Вся графика и звук генерируются **процедурно в коде**: модели собираются из `BoxMesh`, `CylinderMesh`,
-> `SphereMesh`, `PrismMesh`, `TorusMesh`; рельеф, вода, небо, иконки интерфейса (SVG-разметка в коде)
-> и звуковые эффекты (синтез `AudioStreamWAV`) создаются при запуске. Внешних ассетов (`.obj`, `.png`,
-> `.glb`, `.wav`) нет — проект запускается сразу после клонирования.
+> Графика и звуковые эффекты генерируются **процедурно в коде**: модели самолётов строит параметрический
+> генератор (лофт фюзеляжа по сечениям, крылья с профилем NACA, фонари, винты, сопла), рельеф, море, небо,
+> облака, леса, текстуры шумов, опознавательные знаки (SVG в коде) и звуки (синтез `AudioStreamWAV`)
+> создаются при запуске. Единственные внешние файлы — музыка в `sounds/`.
 
 ## Возможности
 
-- **Командный центр** — тёмный неоновый интерфейс, крупное название BALLISTIK, 3D-голограмма карты
-  и сетка радара с лучом развёртки на фоне, кнопки «В БОЙ», «НАСТРОЙКИ», «ВЫХОД».
-- **Лобби с лимитированными слотами** — вкладки «Авиация / Наземная ПВО / Военный Флот», карточки техники
-  со счётчиками «МиГ-29 [1/2]»; если все слоты заняты — кнопка выбора заблокирована. Боты сами занимают слоты.
-- **Пять классов техники** с собственной физикой и вооружением (см. таблицу ниже) и эсминцы команд —
-  стратегические цели с ЗАК, которые сбивают авиацию и подлетающие ракеты.
-- **Баллистика**: все снаряды — физические объекты со скоростью, квадратичным сопротивлением и гравитацией.
-  Баллистическая ракета летит по параболе в указанную на карте точку (решатель подбирает начальную скорость
-  с учётом сопротивления), удар создаёт зону поражения `Area3D` с повышенным уроном по зданиям и кораблям.
-- **Тактическая карта** (G): метка удара, кольцо дальности, предпросмотр траектории, дистанция и подлётное время.
-- **ИИ ботов**: выбор свободных слотов по потребностям команды, патрулирование, обнаружение с учётом прямой
-  видимости, стрельба с упреждением, ракетные атаки, бомбометание по CCIP, торпедные атаки, уклонение с ловушками.
-- **HUD**: круговой радар 3D/2D (самолёты — треугольники, корабли — квадраты, ПВО — круги, высоты на «ножках»),
-  панель ХП/скорости/высоты/боезапаса/перезарядки, рамка захвата, индикатор упреждения, маркеры целей.
+- **5 больших карт** (зона боя ~14×14 км, мир ~27×27 км, море до горизонта), у каждой свой климат,
+  освещение и погода:
+
+  | Карта | Климат и время | Особенности |
+  |---|---|---|
+  | Северное побережье | умеренный, утро | холмы, смешанные леса, поля, острова с маяком |
+  | Тропический архипелаг | тропики, полдень | гористые острова, бирюзовые отмели, пальмы |
+  | Пустынный залив | засушливый, дымка | плато и столовые горы, орошаемые поля у воды |
+  | Северные фьорды | субарктика, пасмурно | заснеженные хребты, извилистые фьорды, ели |
+  | Закатный пролив | средиземноморье, закат | два берега через пролив, кипарисы |
+
+  Рельеф каждого боя уникален (зерно карты), стороны в равных условиях — шум рельефа симметричен
+  относительно зеркала карты. Базы: аэродром, штаб, РЛС, позиции ПВО, ВМБ с причалом, эсминец.
+- **Детальная графика**: сплаттинг рельефа (луга, лоскуты полей с межами и бороздами, леса, песок и мокрый
+  пляж, скалы со слоями, снег), вода с цветом по глубине, прибоем и пеной, аналитическое небо с перистыми
+  облаками, объёмные кучевые облака с тенями на земле, леса (MultiMesh, 2 уровня детализации), воздушная
+  перспектива, тонмаппинг AgX, каскадные тени, SSAO; рельеф — чанки с 4 уровнями детализации.
+- **19 самолётов** с детальными моделями, камуфляжем (пятна, «сплинтер», крап, натуральный металл),
+  панельными линиями, опознавательными знаками-декалями, вращающимися винтами, форсажем, инверсионными
+  следами:
+
+  | Роль | Поршневые (1940-е) | Реактивные |
+  |---|---|---|
+  | Истребители | Bf 109 G-6, Fw 190 A-8, Як-9Т, Ла-5ФН, P-51D, P-40E, Spitfire Mk IX, A6M5 Zero | МиГ-29, Су-27, F-16C, F-4E Phantom II, Mirage 2000C, Rafale C |
+  | Ударные | Ил-2, B-25J Mitchell | Су-24М, Су-25, A-10A |
+
+  Вооружение из данных: пушки со сведением, ракеты «воздух-воздух» с ИК ГСН (у поршневых нет ловушек,
+  зато захват их дольше), НАР, бомбы с прицелом CCIP, управляемые ракеты по выбранной цели и по метке
+  тактической карты. Эпоха авиации боя: смешанная, поршневая или реактивная.
+- **Наземная ПВО и флот**: ЗСУ «Гепард», ЗРК Patriot / Бук-М1, катера Sea Baby / G-5 (пулемёт, торпеды,
+  баллистическая ракета до 9 км), эсминцы команд с ЗАК — стратегические цели.
+- **Боты мягче**: три уровня сложности («Новобранец», «Ветеран», «Ас»); боты медлят, промахиваются,
+  делают паузы перед пусками ракет, реже выбирают целью игрока, их урон по игроку снижен, ЗРК ботов
+  захватывают дольше. Выбрав технику, занятую ботом своей команды, игрок вытесняет его.
+- **Музыка**: треки из `sounds/` — «Briefing at Midnight» в меню, «Intercept Vector» и «Target Locked in
+  Salt» в бою, плавные переходы, приглушение на паузе, отдельные громкости музыки и эффектов.
+- **Меню**: кинематографичный 3D-фон (звено самолётов над случайной картой), лобби с превью карт,
+  выбором эпохи и 3D-просмотром техники, **ангар** со всей техникой, экран загрузки с прогрессом.
 - **Кроссплатформенность**: Windows, Linux, Android (сенсорное управление), поддержка геймпада.
+  Качество графики: Низкое / Среднее / Высокое / Ультра.
 
-## Техника и слоты (на команду)
-
-| Категория | Класс | Модель (СИНИЕ / КРАСНЫЕ) | Слоты | Вооружение |
-|---|---|---|:-:|---|
-| ✈️ Авиация | Истребитель | МиГ-29 | 2 | автопушка ГШ-30-1, 4× Р-73 (ИК ГСН), ловушки |
-| ✈️ Авиация | Бомбардировщик | Су-24М | 1 | 8× ФАБ-500 (прицел CCIP), 2× Х-59 (крылатые), ловушки |
-| 🛡️ Наземная ПВО | ЗСУ | Гепард | 2 | 2× 35-мм, трассеры, неконтактные снаряды, РЛС сопровождения |
-| 🛡️ Наземная ПВО | ЗРК | Patriot / Бук-М1 | 1 | 4× ЗУР с разгоном и пропорциональным наведением, РЛС захвата 7 км |
-| ⚓ Военный Флот | Бронекатер | Sea Baby / G-5 | 3 | пулемёт, 2× торпеды, баллистическая ракета |
-
-Точки появления: авиация — воздушный старт над аэродромом, ПВО — береговые позиции, флот — у причала ВМБ.
 Победа — по лимиту очков или по истечении времени (очки за технику, сооружения и эсминцы противника).
 
 ## Запуск
@@ -57,7 +72,7 @@ godot --path .
 | Действие | Клавиши |
 |---|---|
 | Основное / дополнительное оружие | ЛКМ, Пробел / ПКМ, F |
-| Тактическая карта (баллистика, Х-59) | G или СКМ |
+| Тактическая карта (баллистика, управляемые ракеты) | G или СКМ |
 | Ловушки · зум · режим радара 3D/2D | X · Z · T |
 | Счёт · пауза · справка | Tab · Esc · F1 |
 | **Авиация** | мышь — направление полёта; W/S — газ; A/D — крен; Q/E — рыскание; стрелки — ручное управление; C — камера |
@@ -68,70 +83,60 @@ godot --path .
 **Геймпад**: левый стик — движение, правый — обзор, триггеры — оружие, A — карта, B — ловушки, Y — радар.
 
 **Android**: плавающий джойстик слева, обзор перетаскиванием по правой половине экрана, кнопки оружия, газа
-и ловушек; в тактическом режиме касание ставит метку, «ПУСК» — запуск. Сенсорное управление включается
-автоматически на мобильных устройствах (можно принудительно включить в настройках).
+и ловушек; в тактическом режиме касание ставит метку, «ПУСК» — запуск.
 
 ## Архитектура
 
 ```mermaid
 flowchart LR
-    GS[GameSettings<br/>autoload] --> MM[MainMenuUI<br/>командный центр, лобби]
-    MM -->|слоты, старт| GBM[GlobalBattleManager<br/>autoload: слоты, очки, спавн]
-    GBM -->|change_scene| BL[BattleLevel<br/>процедурная арена]
-    BL --> T[Terrain + MapLayout]
-    BL --> PC[PlayerController] & CR[CameraRig] & HUD
+    GS[GameSettings] --> MM[MainMenuUI<br/>меню, лобби, ангар]
+    MU[MusicPlayer] --- MM
+    MM -->|слоты, карта, старт| GBM[GlobalBattleManager<br/>слоты, роли, очки, спавн]
+    GBM -->|change_scene| BL[BattleLevel<br/>генерация в фоне]
+    BL --> ML[MapLayout + Terrain<br/>TerrainSampler] --> TR[TerrainRenderer<br/>чанки + LOD]
+    BL --> AT[Atmosphere] & W[WaterSurface] & CF[CloudField] & VG[Vegetation]
     GBM -->|spawn| V[Vehicle]
-    V --> F[Fighter / Bomber]
+    V --> A[Aircraft ← AircraftBuilder]
     V --> G[AAGun / SAMLauncher]
     V --> B[PatrolBoat / Warship]
     AI[BotAI] -->|VehicleControls| V
-    PC -->|VehicleControls| V
-    V -->|стрельба| P[Projectile]
-    P --> GM[GuidedMissile] & BM[BallisticMissile] & CM[CruiseMissile] & TO[Torpedo] & BO[Bomb]
-    P -->|взрыв| EX[Explosion Area3D]
+    PC[PlayerController] -->|VehicleControls| V
 ```
 
 Техника не знает, кто ею управляет: игрок (`PlayerController`) и бот (`BotAI`) заполняют одну и ту же
-структуру `VehicleControls`, а техника применяет её в своём физическом шаге.
+структуру `VehicleControls`. Самолёты полностью описаны данными (`GameDB` — лётные характеристики и оружие,
+`AircraftSpecs` — геометрия и окраска).
 
 ```
 res://
-├── autoload/
-│   ├── GlobalBattleManager.gd   # слоты по командам, участники, очки, время, спавн/респавн, реестр юнитов
-│   ├── GameSettings.gd          # настройки (user://settings.cfg), карта ввода (физические клавиши, геймпад)
-│   └── SoundFX.gd               # процедурный синтез звуков (AudioStreamWAV) и пул 3D-источников
-├── scenes/
-│   ├── MainMenu.tscn            # корень меню (Control + MainMenuUI.gd)
-│   └── BattleLevel.tscn         # корень боя (Node3D + BattleLevel.gd)
+├── autoload/        GameSettings, SoundFX, MusicPlayer, GlobalBattleManager
+├── scenes/          MainMenu.tscn, BattleLevel.tscn
+├── sounds/          музыка (mp3)
 ├── scripts/
-│   ├── core/        GameDB (данные техники и слотов), BallisticSolver, Weapon, VehicleControls, Participant
-│   ├── procedural/  MeshFactory, ModelBuilder, VehicleModels, StructureModels, IconFactory
-│   ├── vehicles/    Vehicle (база), Aircraft → Fighter/Bomber, GroundVehicle → AAGun/SAMLauncher, PatrolBoat, Warship
-│   ├── weapons/     Projectile, GuidedMissile, BallisticMissile, CruiseMissile, Bomb, Torpedo, Explosion, Flare
-│   ├── ai/          BotAI (выбор слотов и поведение ботов)
-│   ├── world/       BattleLevel, Terrain, MapLayout, Building, CameraRig, PlayerController, TacticalMarker
-│   ├── fx/          Effects (взрывы, дым GPUParticles3D, всплески), FallingWreck
-│   └── ui/          MainMenuUI, MenuRadarScene, SlotSelector, SettingsPanel, HUD, HUDOverlay, RadarWidget, TouchControls, UITheme
-├── tests/compile_check.tscn     # компиляция всех скриптов (используется в CI)
-├── tools/export.ps1, export.sh  # автоматическая сборка через Godot CLI
-└── export_presets.cfg           # пресеты: Windows Desktop, Linux, Android
+│   ├── core/        GameDB (техника, роли, сложность), BallisticSolver, Weapon, VehicleControls, Participant
+│   ├── procedural/  AircraftBuilder, AircraftSpecs, Insignia, VehicleModels, TreeMeshes, MeshKit, StructureModels…
+│   ├── vehicles/    Vehicle, Aircraft, GroundVehicle → AAGun/SAMLauncher, PatrolBoat, Warship
+│   ├── weapons/     Projectile, GuidedMissile, Rocket, BallisticMissile, CruiseMissile, Bomb, Torpedo, Explosion, Flare
+│   ├── world/       MapPresets, MapLayout, Terrain, TerrainSampler, TerrainMeshBuilder, TerrainRenderer,
+│   │                WaterSurface, Atmosphere, CloudField, Vegetation, MapPreview, BattleLevel, CameraRig…
+│   ├── fx/          Effects, ShaderLib (шейдеры), ProcTextures (процедурные текстуры), FallingWreck
+│   └── ui/          MainMenuUI, MenuBackdrop, ModelViewer, SlotSelector, SettingsPanel, HUD, HUDOverlay…
+├── tests/           compile_check, map_previews (миникарты и замер генерации), hangar_shots (рендер моделей)
+└── tools/           export.ps1, export.sh
 ```
+
+Тяжёлая генерация (сетка высот, меши чанков, расстановка леса, облака) идёт в фоновых потоках; каждый
+поток рельефа использует свой `TerrainSampler` (вызовы методов общих объектов движка из разных потоков
+сериализуются, чистая математика GDScript — масштабируется).
 
 ## Сборка (Export) через Godot CLI
 
 Версия шаблонов экспорта должна совпадать с версией редактора — **4.7.2.stable**.
 
-### Требования
-
 | Платформа | Что нужно |
 |---|---|
 | Windows `.exe`, Linux | Godot 4.7.2 + шаблоны экспорта 4.7.2 |
-| Android `.apk` | дополнительно OpenJDK 17 и Android SDK: `platform-tools`, `build-tools;35.0.1`, `platforms;android-35` (переменные `JAVA_HOME`, `ANDROID_HOME` или пути в Editor Settings → Export → Android) |
-
-Шаблоны экспорта ставятся в редакторе (**Editor → Manage Export Templates → Download and Install**)
-или скриптом сборки с флагом установки шаблонов.
-
-### Скрипт сборки
+| Android `.apk` | дополнительно OpenJDK 17 и Android SDK: `platform-tools`, `build-tools;35.0.1`, `platforms;android-35` |
 
 Windows (PowerShell):
 
@@ -145,10 +150,7 @@ Linux / macOS:
 GODOT=~/bin/Godot_v4.7.2-stable_linux.x86_64 ./tools/export.sh --targets "linux windows android" --install-templates
 ```
 
-Параметры: платформы `windows`, `linux`, `android`; режим `release` (по умолчанию) или `debug`;
-пропуск проверки скриптов. Скрипт импортирует проект, компилирует все скрипты и кладёт сборки в `build/`.
-
-### Команды Godot CLI напрямую
+Команды напрямую:
 
 ```bash
 godot --headless --path . --import
@@ -157,43 +159,32 @@ godot --headless --path . --export-release "Linux" build/linux/BALLISTIK.x86_64
 godot --headless --path . --export-debug "Android" build/android/BALLISTIK-debug.apk
 ```
 
-### Подпись Android
-
-Debug-APK подписывается отладочным ключом редактора автоматически. Для release-APK создайте ключ
-и передайте его через переменные окружения (пароли не хранятся в репозитории):
-
-```bash
-keytool -genkeypair -v -keystore ballistik-release.keystore -alias ballistik -keyalg RSA -keysize 2048 -validity 10000
-```
-
-```bash
-export GODOT_ANDROID_KEYSTORE_RELEASE_PATH=/path/to/ballistik-release.keystore
-export GODOT_ANDROID_KEYSTORE_RELEASE_USER=ballistik
-export GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD='пароль'
-./tools/export.sh --targets android --mode release
-```
+Release-APK подписывается ключом из переменных `GODOT_ANDROID_KEYSTORE_RELEASE_PATH` / `_USER` / `_PASSWORD`.
 
 ### CI (GitHub Actions)
 
 `.github/workflows/build.yml` на каждый push в `main` и pull request: скачивает Godot 4.7.2 и шаблоны,
-ставит Android SDK 35 и JDK 17, компилирует все скрипты, прогоняет автотесты боя и экспортирует
-Windows `.exe`, Linux и Android `.apk` (артефакты сборки доступны на странице запуска).
-При пуше тега `v*` сборки публикуются в GitHub Release.
+компилирует все скрипты, прогоняет бои ботов на всех картах и тесты ручного управления, экспортирует
+Windows `.exe`, Linux и Android `.apk`. При пуше тега `v*` сборки публикуются в GitHub Release.
 
 ## Автотесты
 
 ```bash
-# компиляция всех скриптов с загруженными autoload
+# компиляция всех скриптов
 godot --headless --path . res://tests/compile_check.tscn
 
-# бой ботов 45 с без окна; в конце — статистика (попадания, пуски, перехваты, счёт)
-godot --headless --path . -- --smoke-test --smoke-seconds=45
+# бой ботов 45 с без окна на заданной карте (coast, archipelago, desert, fjords, strait)
+godot --headless --path . -- --smoke-test --smoke-seconds=45 --smoke-map=coast
 
-# имитация ручного управления + тактический баллистический удар с катера
-godot --headless --path . -- --smoke-test --smoke-human --smoke-tactical --smoke-vehicle=boat --smoke-seconds=30
+# ручное управление + удар по метке тактической карты
+godot --headless --path . -- --smoke-test --smoke-human --smoke-tactical --smoke-vehicle=su25 --smoke-seconds=30
 
-# с окном и скриншотами
-godot --path . -- --smoke-test --smoke-vehicle=fighter --shots=/tmp/ballistik_shots
+# миникарты всех карт и время генерации рельефа
+godot --headless --path . --script res://tests/map_previews.gd -- --out=/tmp/maps --res=1024
+
+# рендер моделей техники (нужно окно)
+godot --path . --script res://tests/hangar_shots.gd -- --out=/tmp/hangar --types=bf109,p51,mig29
 ```
 
-Дополнительные параметры запуска: `--touch` — включить сенсорный интерфейс на ПК, `--quality=0|1|2` — качество графики.
+Параметры запуска: `--smoke-vehicle=<тип>` (например `bf109`, `a10`, `boat`), `--smoke-era=0|1|2`,
+`--shots=DIR` — скриншоты, `--touch` — сенсорный интерфейс на ПК, `--quality=0..3` — качество графики.

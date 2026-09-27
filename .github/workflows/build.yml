@@ -84,20 +84,26 @@ jobs:
       - name: Компиляция всех скриптов
         run: ~/godot-bin/godot --headless --path . res://tests/compile_check.tscn
 
-      - name: Автотест — бой ботов (headless)
+      - name: Автотест — бой ботов на всех картах (headless)
         run: |
           set -o pipefail
-          ~/godot-bin/godot --headless --path . -- --smoke-test --smoke-seconds=45 2>&1 | tee smoke.log
-          if grep -q "SCRIPT ERROR" smoke.log; then
+          ~/godot-bin/godot --headless --path . -- --smoke-test --smoke-seconds=45 --smoke-map=coast 2>&1 | tee smoke-coast.log
+          for map in archipelago desert fjords strait; do
+            ~/godot-bin/godot --headless --path . -- --smoke-test --smoke-seconds=15 --smoke-map=$map --quality=0 2>&1 | tee smoke-$map.log
+          done
+          if grep -q "SCRIPT ERROR" smoke-*.log; then
             echo "::error::Ошибки скриптов во время автотеста"
             exit 1
           fi
+          grep -h "\[LEVEL\]\|\[SMOKE\] map" smoke-*.log
 
-      - name: Автотест — ручное управление и баллистика (headless)
+      - name: Автотест — ручное управление, авиация и баллистика (headless)
         run: |
           set -o pipefail
-          ~/godot-bin/godot --headless --path . -- --smoke-test --smoke-human --smoke-tactical --smoke-vehicle=boat --smoke-seconds=30 2>&1 | tee smoke-human.log
-          if grep -q "SCRIPT ERROR" smoke-human.log; then
+          ~/godot-bin/godot --headless --path . -- --smoke-test --smoke-human --smoke-tactical --smoke-vehicle=boat --smoke-seconds=30 --quality=0 2>&1 | tee human-boat.log
+          ~/godot-bin/godot --headless --path . -- --smoke-test --smoke-human --smoke-tactical --smoke-vehicle=su25 --smoke-seconds=25 --quality=0 2>&1 | tee human-su25.log
+          ~/godot-bin/godot --headless --path . -- --smoke-test --smoke-human --smoke-vehicle=p51 --smoke-era=1 --smoke-seconds=20 --quality=0 2>&1 | tee human-p51.log
+          if grep -q "SCRIPT ERROR" human-*.log; then
             echo "::error::Ошибки скриптов во время автотеста"
             exit 1
           fi

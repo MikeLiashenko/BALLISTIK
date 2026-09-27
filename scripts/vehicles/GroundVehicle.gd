@@ -71,7 +71,8 @@ func _vehicle_physics(delta: float) -> void:
 
 
 func _is_passable(from: Vector3, to: Vector3) -> bool:
-	if absf(to.x) > GameDB.MAP_HALF + 150.0 or absf(to.z) > GameDB.MAP_HALF + 150.0:
+	var bound := GlobalBattleManager.bounds() + 150.0
+	if absf(to.x) > bound or absf(to.z) > bound:
 		return false
 	var h := terrain.get_height(to.x, to.z)
 	if h < Terrain.LAND_HEIGHT:

@@ -118,7 +118,8 @@ func _clean_missiles() -> void:
 
 func _check_bounds(delta: float) -> void:
 	var p := global_position
-	if absf(p.x) > GameDB.MAP_HALF or absf(p.z) > GameDB.MAP_HALF:
+	var b := GlobalBattleManager.bounds()
+	if absf(p.x) > b or absf(p.z) > b:
 		out_of_bounds_time += delta
 		if out_of_bounds_time > OUT_OF_BOUNDS_GRACE:
 			apply_damage(max_health * 0.12 * delta, "environment", {})
@@ -148,6 +149,8 @@ func apply_damage(amount: float, damage_type: String, source: Dictionary) -> voi
 	if spawn_protection > 0.0 and damage_type != "environment":
 		return
 	var dmg := amount * float(damage_modifiers.get(damage_type, 1.0))
+	if is_player and bool(source.get("bot", false)):
+		dmg *= float(GameDB.difficulty(GlobalBattleManager.difficulty).get("damage", 1.0))
 	if dmg <= 0.0:
 		return
 	health -= dmg
@@ -238,6 +241,7 @@ func make_source(weapon_name: String) -> Dictionary:
 		"attacker_name": pilot_name,
 		"vehicle_label": GameDB.vehicle_name(vehicle_type, team),
 		"weapon": weapon_name,
+		"bot": not is_player,
 	}
 
 

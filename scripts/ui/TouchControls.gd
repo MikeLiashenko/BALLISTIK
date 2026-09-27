@@ -43,11 +43,13 @@ func configure(p_category: int, vehicle: Vehicle) -> void:
 		return
 	match category:
 		GameDB.Category.AIR:
-			var is_bomber := vehicle is Bomber
-			_add_button("fire", "БОМБЫ" if is_bomber else "ПУШКА", Vector2.ZERO, 62.0, "br", Vector2(125.0, 135.0))
-			_add_button("secondary", "Х-59" if is_bomber else "Р-73", Vector2.ZERO, 46.0, "br", Vector2(265.0, 100.0))
-			_add_button("flares", "ЛТЦ", Vector2.ZERO, 40.0, "br", Vector2(250.0, 230.0))
-			if is_bomber:
+			var a := vehicle as Aircraft
+			_add_button("fire", a.slot_label("primary") if a != null else "ОГОНЬ", Vector2.ZERO, 62.0, "br", Vector2(125.0, 135.0))
+			if a != null and a.slots.has("secondary"):
+				_add_button("secondary", a.slot_label("secondary"), Vector2.ZERO, 46.0, "br", Vector2(265.0, 100.0))
+			if a != null and a.flares != null:
+				_add_button("flares", "ЛТЦ", Vector2.ZERO, 40.0, "br", Vector2(250.0, 230.0))
+			if a != null and a.slots.has("special"):
 				_add_button("special", "КАРТА", Vector2.ZERO, 42.0, "br", Vector2(115.0, 285.0))
 			_add_button("thr_up", "ГАЗ+", Vector2.ZERO, 36.0, "bl", Vector2(60.0, 360.0))
 			_add_button("thr_down", "ГАЗ−", Vector2.ZERO, 36.0, "bl", Vector2(60.0, 270.0))

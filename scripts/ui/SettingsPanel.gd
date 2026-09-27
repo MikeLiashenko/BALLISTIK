@@ -7,6 +7,8 @@ extends PanelContainer
 signal closed
 
 var _volume: HSlider
+var _music: HSlider
+var _sfx: HSlider
 var _sensitivity: HSlider
 var _invert: CheckButton
 var _mouse_aim: CheckButton
@@ -17,17 +19,27 @@ var _fps: CheckButton
 
 
 func _ready() -> void:
-	custom_minimum_size = Vector2(560.0, 0.0)
-	add_theme_stylebox_override("panel", UITheme.panel_style(UITheme.NEON_DIM, UITheme.PANEL_SOLID))
-	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 12)
-	add_child(box)
+	custom_minimum_size = Vector2(600.0, 0.0)
+	add_theme_stylebox_override("panel", UITheme.glass_panel(UITheme.NEON_DIM, UITheme.PANEL_SOLID))
+	var outer := VBoxContainer.new()
+	outer.add_theme_constant_override("separation", 10)
+	add_child(outer)
 	var title := UITheme.make_label("НАСТРОЙКИ", 30, UITheme.NEON)
 	UITheme.glow_label(title, UITheme.NEON, 2, 8)
-	box.add_child(title)
-	box.add_child(UITheme.separator())
+	outer.add_child(title)
+	outer.add_child(UITheme.separator())
+	var scroll := ScrollContainer.new()
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.custom_minimum_size = Vector2(560.0, 470.0)
+	outer.add_child(scroll)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 10)
+	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(box)
 	box.add_child(UITheme.make_label("ЗВУК", 15, UITheme.ACCENT))
-	_volume = _slider(box, "Громкость", 0.0, 1.0, GameSettings.master_volume)
+	_volume = _slider(box, "Общая громкость", 0.0, 1.0, GameSettings.master_volume)
+	_music = _slider(box, "Музыка", 0.0, 1.0, GameSettings.music_volume)
+	_sfx = _slider(box, "Эффекты", 0.0, 1.0, GameSettings.sfx_volume)
 	box.add_child(UITheme.make_label("УПРАВЛЕНИЕ", 15, UITheme.ACCENT))
 	_sensitivity = _slider(box, "Чувствительность мыши / обзора", 0.2, 3.0, GameSettings.mouse_sensitivity)
 	_invert = _check(box, "Инверсия оси Y", GameSettings.invert_y)
@@ -38,10 +50,12 @@ func _ready() -> void:
 	if not GameSettings.is_mobile():
 		_fullscreen = _check(box, "Полноэкранный режим", GameSettings.fullscreen)
 	_fps = _check(box, "Показывать FPS", GameSettings.show_fps)
-	box.add_child(UITheme.make_label("Качество графики применяется со следующего боя.", 13, UITheme.TEXT_DIM))
+	var note := UITheme.make_label("Качество графики (детализация рельефа, леса, облака, тени) применяется со следующего боя. «Ультра» — для мощных ПК.", 13, UITheme.TEXT_DIM)
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	box.add_child(note)
 	var buttons := HBoxContainer.new()
 	buttons.alignment = BoxContainer.ALIGNMENT_END
-	box.add_child(buttons)
+	outer.add_child(buttons)
 	var back := UITheme.make_button("ГОТОВО", Vector2(200.0, 48.0), 20)
 	back.pressed.connect(_on_close)
 	buttons.add_child(back)
@@ -94,6 +108,8 @@ func _option(parent: Control, label_text: String, items: Array, selected: int) -
 
 func _apply() -> void:
 	GameSettings.master_volume = _volume.value
+	GameSettings.music_volume = _music.value
+	GameSettings.sfx_volume = _sfx.value
 	GameSettings.mouse_sensitivity = _sensitivity.value
 	GameSettings.invert_y = _invert.button_pressed
 	GameSettings.aircraft_mouse_aim = _mouse_aim.button_pressed

@@ -1,7 +1,8 @@
 extends Node
 ## Процедурный звук (Autoload). Все эффекты синтезируются при запуске в AudioStreamWAV
 ## (16 бит, моно): выстрелы, взрывы, пуски ракет, всплески, сигналы захвата, звуки интерфейса
-## и зацикленные звуки двигателей. Внешние аудиофайлы не используются.
+## и зацикленные звуки двигателей (турбина, рядный и звездообразный поршневые моторы, дизель, катер).
+## Эффекты идут через шину SFX (громкость — в настройках), музыка — через MusicPlayer.
 
 const MIX_RATE := 22050
 const POOL_3D := 32
@@ -22,12 +23,14 @@ func _ready() -> void:
 	for i in POOL_3D:
 		var p := AudioStreamPlayer3D.new()
 		p.attenuation_model = AudioStreamPlayer3D.ATTENUATION_INVERSE_DISTANCE
-		p.max_distance = 3500.0
+		p.max_distance = 4500.0
 		p.unit_size = 30.0
+		p.bus = GameSettings.BUS_SFX
 		add_child(p)
 		_pool_3d.append(p)
 	for i in POOL_2D:
 		var p := AudioStreamPlayer.new()
+		p.bus = GameSettings.BUS_SFX
 		add_child(p)
 		_pool_2d.append(p)
 
@@ -73,8 +76,9 @@ func create_loop_player(key: String, volume_db: float = -8.0, unit_size: float =
 	p.stream = _streams.get(key)
 	p.volume_db = volume_db
 	p.unit_size = unit_size
-	p.max_distance = 900.0
+	p.max_distance = 1200.0
 	p.autoplay = false
+	p.bus = GameSettings.BUS_SFX
 	return p
 
 
@@ -114,6 +118,8 @@ func _generate_all() -> void:
 	_streams["engine_jet"] = _to_wav(_engine_jet(), true)
 	_streams["engine_diesel"] = _to_wav(_engine_pulse(24.0, 0.09, 55.0), true)
 	_streams["engine_boat"] = _to_wav(_engine_pulse(36.0, 0.14, 72.0), true)
+	_streams["engine_prop"] = _to_wav(_engine_piston(62.0, 93.0, 1.0), true)
+	_streams["engine_radial"] = _to_wav(_engine_piston(41.0, 70.0, 1.8), true)
 
 
 func _to_wav(samples: PackedFloat32Array, loop: bool = false) -> AudioStreamWAV:
@@ -295,6 +301,27 @@ func _engine_pulse(rate_hz: float, noise_lp: float, tone_hz: float) -> PackedFlo
 		y += noise_lp * (white - y)
 		var pulse := pow(maxf(sin(TAU * rate_hz * t), 0.0), 6.0)
 		buf[i] = y * (0.5 + pulse * 1.6) + sin(TAU * tone_hz * t) * 0.25 * (0.4 + pulse)
+	return _normalize(_make_loop(buf, fade), 0.8)
+
+
+## Зацикленный поршневой мотор с воздушным винтом: вспышки в цилиндрах (fire_hz), гармоники
+## выхлопа, гул винта (prop_hz) и шум потока. rough — «неровность» (звездообразные моторы грубее).
+func _engine_piston(fire_hz: float, prop_hz: float, rough: float) -> PackedFloat32Array:
+	var n := MIX_RATE
+	var fade := int(MIX_RATE * 0.1)
+	var buf := PackedFloat32Array()
+	buf.resize(n + fade)
+	var y := 0.0
+	var y2 := 0.0
+	for i in n + fade:
+		var t := float(i) / MIX_RATE
+		var white := _rng.randf_range(-1.0, 1.0)
+		y += 0.12 * (white - y)
+		y2 += 0.02 * (white - y2)
+		var fire := pow(maxf(sin(TAU * fire_hz * t), 0.0), 5.0)
+		var hum := sin(TAU * fire_hz * 0.5 * t) * 0.34 + sin(TAU * fire_hz * t) * 0.26 + sin(TAU * fire_hz * 2.0 * t) * 0.1
+		var prop := sin(TAU * prop_hz * t) * 0.18 + sin(TAU * prop_hz * 2.0 * t) * 0.07
+		buf[i] = y * (0.35 + fire * 0.9 * rough) + y2 * 2.2 + hum * (0.55 + 0.45 * fire) + prop
 	return _normalize(_make_loop(buf, fade), 0.8)
 
 

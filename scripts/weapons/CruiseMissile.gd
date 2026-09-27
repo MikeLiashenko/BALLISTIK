@@ -6,6 +6,8 @@ extends Projectile
 
 var target_point: Vector3 = Vector3.ZERO
 var target_node: Node3D = null
+## Прямая атака (Х-25, AGM-65): без маршевого участка на малой высоте, сразу на цель.
+var direct: bool = false
 var cruise_speed: float = 250.0
 var cruise_altitude: float = 40.0
 var turn_rate: float = 1.1
@@ -85,7 +87,9 @@ func _integrate(delta: float) -> void:
 			_marker.global_position = Vector3(aim.x, aim.y + 0.5, aim.z)
 	var flat_dist := GameDB.flat_distance(aim, pos)
 	var desired: Vector3
-	if flat_dist > 450.0 and terrain != null:
+	if direct:
+		cruise_speed = 330.0
+	if flat_dist > 450.0 and terrain != null and not direct:
 		var ahead := pos + GameDB.flat(velocity).normalized() * 220.0
 		var ground := maxf(terrain.get_surface_height(ahead.x, ahead.z), terrain.get_surface_height(pos.x, pos.z))
 		var alt := ground + cruise_altitude

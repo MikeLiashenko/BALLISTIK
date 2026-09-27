@@ -9,8 +9,8 @@ extends Projectile
 const ELEVATION_DEG := 42.0
 const GRAVITY_SCALE := 4.0
 const DRAG := 0.00002
-const MIN_RANGE := 400.0
-const MAX_RANGE := 3600.0
+const MIN_RANGE := 600.0
+const MAX_RANGE := 9000.0
 const BOOST_TIME := 1.6
 
 var target_point: Vector3 = Vector3.ZERO

@@ -23,6 +23,7 @@ config/icon="res://icon.svg"
 
 GameSettings="*res://autoload/GameSettings.gd"
 SoundFX="*res://autoload/SoundFX.gd"
+MusicPlayer="*res://autoload/MusicPlayer.gd"
 GlobalBattleManager="*res://autoload/GlobalBattleManager.gd"
 
 [display]

@@ -1,15 +1,20 @@
 extends Node
-## Настройки игры (Autoload): звук, управление, графика и параметры матча.
-## Сохраняются в user://settings.cfg. Здесь же программно регистрируется карта ввода (InputMap):
-## клавиши задаются физическими кодами, поэтому управление работает при любой раскладке (в т.ч. ЙЦУКЕН).
+## Настройки игры (Autoload): звук (общая громкость, музыка, эффекты), управление, графика и параметры
+## матча (карта, эпоха авиации, сложность). Сохраняются в user://settings.cfg. Здесь же программно
+## регистрируются аудиошины Music/SFX и карта ввода (InputMap): клавиши задаются физическими кодами,
+## поэтому управление работает при любой раскладке (в т.ч. ЙЦУКЕН).
 
 signal settings_changed
 
 const SAVE_PATH := "user://settings.cfg"
-const QUALITY_NAMES := ["Низкое", "Среднее", "Высокое"]
+const QUALITY_NAMES := ["Низкое", "Среднее", "Высокое", "Ультра"]
+const BUS_MUSIC := "Music"
+const BUS_SFX := "SFX"
 const TOUCH_MODE_NAMES := ["Авто", "Включено", "Выключено"]
 
 var master_volume: float = 0.8
+var music_volume: float = 0.6
+var sfx_volume: float = 0.9
 var mouse_sensitivity: float = 1.0
 var invert_y: bool = false
 var aircraft_mouse_aim: bool = true
@@ -22,21 +27,34 @@ var team_size: int = 7
 var score_limit: int = 1000
 var time_limit_min: int = 15
 var player_team: int = 0
+var map_id: String = "random"
+var air_era: int = 0
 var force_touch_cmdline: bool = false
 
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
+	_setup_audio_buses()
 	_setup_input_map()
 	if OS.has_feature("mobile"):
-		quality = 1
+		quality = 0
 	load_settings()
 	for arg in OS.get_cmdline_user_args():
 		if arg == "--touch":
 			force_touch_cmdline = true
 		elif arg.begins_with("--quality="):
-			quality = clampi(int(arg.get_slice("=", 1)), 0, 2)
+			quality = clampi(int(arg.get_slice("=", 1)), 0, QUALITY_NAMES.size() - 1)
 	apply_settings()
+
+
+func _setup_audio_buses() -> void:
+	for bus_name: String in [BUS_MUSIC, BUS_SFX]:
+		if AudioServer.get_bus_index(bus_name) >= 0:
+			continue
+		AudioServer.add_bus()
+		var idx := AudioServer.bus_count - 1
+		AudioServer.set_bus_name(idx, bus_name)
+		AudioServer.set_bus_send(idx, "Master")
 
 
 func is_mobile() -> bool:
@@ -59,6 +77,8 @@ func load_settings() -> void:
 	if cfg.load(SAVE_PATH) != OK:
 		return
 	master_volume = float(cfg.get_value("audio", "master_volume", master_volume))
+	music_volume = float(cfg.get_value("audio", "music_volume", music_volume))
+	sfx_volume = float(cfg.get_value("audio", "sfx_volume", sfx_volume))
 	mouse_sensitivity = float(cfg.get_value("controls", "mouse_sensitivity", mouse_sensitivity))
 	invert_y = bool(cfg.get_value("controls", "invert_y", invert_y))
 	aircraft_mouse_aim = bool(cfg.get_value("controls", "aircraft_mouse_aim", aircraft_mouse_aim))
@@ -71,6 +91,8 @@ func load_settings() -> void:
 	score_limit = int(cfg.get_value("match", "score_limit", score_limit))
 	time_limit_min = int(cfg.get_value("match", "time_limit_min", time_limit_min))
 	player_team = int(cfg.get_value("match", "player_team", player_team))
+	map_id = str(cfg.get_value("match", "map_id", map_id))
+	air_era = int(cfg.get_value("match", "air_era", air_era))
 	_clamp_values()
 
 
@@ -78,6 +100,8 @@ func save_settings() -> void:
 	_clamp_values()
 	var cfg := ConfigFile.new()
 	cfg.set_value("audio", "master_volume", master_volume)
+	cfg.set_value("audio", "music_volume", music_volume)
+	cfg.set_value("audio", "sfx_volume", sfx_volume)
 	cfg.set_value("controls", "mouse_sensitivity", mouse_sensitivity)
 	cfg.set_value("controls", "invert_y", invert_y)
 	cfg.set_value("controls", "aircraft_mouse_aim", aircraft_mouse_aim)
@@ -90,16 +114,23 @@ func save_settings() -> void:
 	cfg.set_value("match", "score_limit", score_limit)
 	cfg.set_value("match", "time_limit_min", time_limit_min)
 	cfg.set_value("match", "player_team", player_team)
+	cfg.set_value("match", "map_id", map_id)
+	cfg.set_value("match", "air_era", air_era)
 	cfg.save(SAVE_PATH)
 
 
 func _clamp_values() -> void:
 	master_volume = clampf(master_volume, 0.0, 1.0)
+	music_volume = clampf(music_volume, 0.0, 1.0)
+	sfx_volume = clampf(sfx_volume, 0.0, 1.0)
 	mouse_sensitivity = clampf(mouse_sensitivity, 0.2, 3.0)
 	touch_mode = clampi(touch_mode, 0, 2)
-	quality = clampi(quality, 0, 2)
+	quality = clampi(quality, 0, QUALITY_NAMES.size() - 1)
 	difficulty = clampi(difficulty, 0, GameDB.DIFFICULTY_LEVELS.size() - 1)
-	team_size = clampi(team_size, 2, GameDB.total_slots())
+	air_era = clampi(air_era, 0, GameDB.ERA_NAMES.size() - 1)
+	if map_id != MapPresets.RANDOM_ID and not MapPresets.MAPS.has(map_id):
+		map_id = MapPresets.RANDOM_ID
+	team_size = clampi(team_size, 2, 16)
 	score_limit = clampi(score_limit, 200, 5000)
 	time_limit_min = clampi(time_limit_min, 3, 60)
 	player_team = clampi(player_team, 0, 1)
@@ -108,6 +139,11 @@ func _clamp_values() -> void:
 func apply_settings() -> void:
 	AudioServer.set_bus_volume_db(0, linear_to_db(maxf(master_volume, 0.0001)))
 	AudioServer.set_bus_mute(0, master_volume <= 0.001)
+	for pair: Array in [[BUS_MUSIC, music_volume], [BUS_SFX, sfx_volume]]:
+		var idx := AudioServer.get_bus_index(str(pair[0]))
+		if idx >= 0:
+			AudioServer.set_bus_volume_db(idx, linear_to_db(maxf(float(pair[1]), 0.0001)))
+			AudioServer.set_bus_mute(idx, float(pair[1]) <= 0.001)
 	if not is_mobile() and DisplayServer.get_name() != "headless":
 		var mode := DisplayServer.WINDOW_MODE_FULLSCREEN if fullscreen else DisplayServer.WINDOW_MODE_WINDOWED
 		if DisplayServer.window_get_mode() != mode:
@@ -117,27 +153,33 @@ func apply_settings() -> void:
 
 ## Применяет качество графики к вьюпорту (сглаживание, масштаб 3D-рендера).
 func apply_viewport_quality(viewport: Viewport) -> void:
+	viewport.use_debanding = quality >= 2
 	match quality:
 		0:
 			viewport.msaa_3d = Viewport.MSAA_DISABLED
-			viewport.screen_space_aa = Viewport.SCREEN_SPACE_AA_DISABLED
+			viewport.screen_space_aa = Viewport.SCREEN_SPACE_AA_FXAA if not is_mobile() else Viewport.SCREEN_SPACE_AA_DISABLED
 			viewport.scaling_3d_scale = 0.75 if is_mobile() else 1.0
 		1:
-			viewport.msaa_3d = Viewport.MSAA_DISABLED
-			viewport.screen_space_aa = Viewport.SCREEN_SPACE_AA_FXAA
-			viewport.scaling_3d_scale = 0.9 if is_mobile() else 1.0
-		_:
 			viewport.msaa_3d = Viewport.MSAA_2X
 			viewport.screen_space_aa = Viewport.SCREEN_SPACE_AA_DISABLED
+			viewport.scaling_3d_scale = 0.9 if is_mobile() else 1.0
+		2:
+			viewport.msaa_3d = Viewport.MSAA_4X
+			viewport.screen_space_aa = Viewport.SCREEN_SPACE_AA_DISABLED
+			viewport.scaling_3d_scale = 1.0
+		_:
+			viewport.msaa_3d = Viewport.MSAA_4X
+			viewport.screen_space_aa = Viewport.SCREEN_SPACE_AA_SMAA
 			viewport.scaling_3d_scale = 1.0
 
 
 func particle_scale() -> float:
-	return [0.45, 0.75, 1.0][quality]
+	return [0.45, 0.75, 1.0, 1.25][quality]
 
 
+## Разрешение сетки высот рельефа (узлов по стороне) по качеству графики.
 func terrain_resolution() -> int:
-	return [144, 200, 256][quality]
+	return [512, 768, 1024, 1024][quality]
 
 
 # --- Карта ввода ------------------------------------------------------------------------------------

@@ -365,12 +365,11 @@ func on_player_vehicle(v: Vehicle) -> void:
 		row.add_child(bar)
 		_weapons_box.add_child(row)
 		_weapon_rows.append({"weapon": w, "ammo": ammo_l, "bar": bar})
-	var range_m := 4000.0
-	match v.vehicle_type:
-		"fighter", "bomber":
-			range_m = 6000.0
-		"sam":
-			range_m = 7000.0
+	var range_m := 5000.0
+	if v.category == GameDB.Category.AIR:
+		range_m = 8000.0
+	elif v.vehicle_type == "sam":
+		range_m = 7000.0
 	radar.range_m = range_m
 	touch_controls.configure(v.category, v)
 	if not v.health_changed.is_connected(_on_player_health_changed):
@@ -559,6 +558,7 @@ func _on_match_ended(winner: int) -> void:
 		_close_all_panels()
 		_end_panel.visible = true
 		get_tree().paused = true
+		MusicPlayer.play_menu()
 		pc.update_mouse_mode()
 	)
 
@@ -590,6 +590,7 @@ func open_pause() -> void:
 	_respawn_panel.visible = false
 	_pause_panel.visible = true
 	get_tree().paused = true
+	MusicPlayer.duck(true)
 	pc.update_mouse_mode()
 
 
@@ -597,6 +598,7 @@ func resume() -> void:
 	_pause_panel.visible = false
 	_settings_panel.visible = false
 	get_tree().paused = false
+	MusicPlayer.duck(false)
 	pc.update_mouse_mode()
 
 

@@ -37,7 +37,7 @@ func _ready() -> void:
 	camera.name = "Camera"
 	camera.fov = 70.0
 	camera.near = 0.5
-	camera.far = 16000.0
+	camera.far = 60000.0
 	add_child(camera)
 	camera.make_current()
 	var level := GlobalBattleManager.level
@@ -177,9 +177,10 @@ func enter_overview() -> void:
 
 func _update_overview(delta: float) -> void:
 	_overview_angle += delta * 0.04
-	var pos := Vector3(sin(_overview_angle) * 2600.0, 1500.0, cos(_overview_angle) * 2600.0)
+	var r := GlobalBattleManager.bounds() * 0.75
+	var pos := Vector3(sin(_overview_angle) * r, 1800.0, cos(_overview_angle) * r)
 	camera.global_position = pos
-	camera.global_basis = GameDB.basis_from_forward(Vector3(0.0, 0.0, 300.0) - pos)
+	camera.global_basis = GameDB.basis_from_forward(Vector3(0.0, 0.0, 0.0) - pos)
 
 
 func _apply_shake() -> void:
