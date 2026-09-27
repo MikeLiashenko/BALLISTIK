@@ -1,0 +1,19 @@
+# Godot 4
+.godot/
+/android/
+*.translation
+export_credentials.cfg
+
+# Сборки
+/build/
+
+# Ключи подписи Android
+*.keystore
+*.jks
+
+# ОС и редакторы
+.DS_Store
+Thumbs.db
+*.tmp
+.vscode/
+.idea/

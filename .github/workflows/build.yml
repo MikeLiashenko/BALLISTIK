@@ -1,0 +1,164 @@
+name: Build BALLISTIK
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GODOT_VERSION: "4.7.2"
+  GODOT_RELEASE: "stable"
+
+jobs:
+  export:
+    name: Проверка и экспорт (Windows / Linux / Android)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: OpenJDK 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Кэш Godot и шаблонов экспорта
+        id: godot-cache
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/godot-bin
+            ~/.local/share/godot/export_templates
+          key: godot-${{ env.GODOT_VERSION }}-${{ env.GODOT_RELEASE }}-v1
+
+      - name: Загрузка Godot и шаблонов экспорта
+        if: steps.godot-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          base="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-${GODOT_RELEASE}"
+          mkdir -p ~/godot-bin
+          curl -fsSL --retry 3 -o /tmp/godot.zip "$base/Godot_v${GODOT_VERSION}-${GODOT_RELEASE}_linux.x86_64.zip"
+          unzip -q /tmp/godot.zip -d ~/godot-bin
+          mv ~/godot-bin/Godot_v${GODOT_VERSION}-${GODOT_RELEASE}_linux.x86_64 ~/godot-bin/godot
+          chmod +x ~/godot-bin/godot
+          curl -fsSL --retry 3 -o /tmp/templates.tpz "$base/Godot_v${GODOT_VERSION}-${GODOT_RELEASE}_export_templates.tpz"
+          tdir=~/.local/share/godot/export_templates/${GODOT_VERSION}.${GODOT_RELEASE}
+          mkdir -p "$tdir"
+          unzip -q /tmp/templates.tpz \
+            "templates/version.txt" \
+            "templates/windows_*_x86_64*" \
+            "templates/linux_*.x86_64" \
+            "templates/android_*.apk" \
+            -d /tmp/tpl
+          mv /tmp/tpl/templates/* "$tdir/"
+          rm -rf /tmp/tpl /tmp/templates.tpz /tmp/godot.zip
+          ls -la "$tdir"
+
+      - name: Android SDK, настройки редактора и отладочный ключ
+        run: |
+          set -euo pipefail
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$sdkmanager" --licenses > /dev/null || true
+          "$sdkmanager" "platform-tools" "build-tools;35.0.1" "platforms;android-35" > /dev/null
+          mkdir -p ~/.config/godot
+          printf '[gd_resource type="EditorSettings" format=3]\n\n[resource]\nexport/android/android_sdk_path = "%s"\nexport/android/java_sdk_path = "%s"\n' \
+            "$ANDROID_HOME" "$JAVA_HOME" > ~/.config/godot/editor_settings-4.7.tres
+          keytool -genkeypair -v -keystore "$RUNNER_TEMP/debug.keystore" -storepass android -keypass android \
+            -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          {
+            echo "GODOT_ANDROID_KEYSTORE_DEBUG_PATH=$RUNNER_TEMP/debug.keystore"
+            echo "GODOT_ANDROID_KEYSTORE_DEBUG_USER=androiddebugkey"
+            echo "GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD=android"
+          } >> "$GITHUB_ENV"
+
+      - name: Импорт проекта
+        run: ~/godot-bin/godot --headless --path . --import
+
+      - name: Компиляция всех скриптов
+        run: ~/godot-bin/godot --headless --path . res://tests/compile_check.tscn
+
+      - name: Автотест — бой ботов (headless)
+        run: |
+          set -o pipefail
+          ~/godot-bin/godot --headless --path . -- --smoke-test --smoke-seconds=45 2>&1 | tee smoke.log
+          if grep -q "SCRIPT ERROR" smoke.log; then
+            echo "::error::Ошибки скриптов во время автотеста"
+            exit 1
+          fi
+
+      - name: Автотест — ручное управление и баллистика (headless)
+        run: |
+          set -o pipefail
+          ~/godot-bin/godot --headless --path . -- --smoke-test --smoke-human --smoke-tactical --smoke-vehicle=boat --smoke-seconds=30 2>&1 | tee smoke-human.log
+          if grep -q "SCRIPT ERROR" smoke-human.log; then
+            echo "::error::Ошибки скриптов во время автотеста"
+            exit 1
+          fi
+
+      - name: Экспорт Windows (.exe)
+        run: |
+          mkdir -p build/windows
+          ~/godot-bin/godot --headless --path . --export-release "Windows Desktop" build/windows/BALLISTIK.exe
+          test -f build/windows/BALLISTIK.exe
+
+      - name: Экспорт Linux (.x86_64)
+        run: |
+          mkdir -p build/linux
+          ~/godot-bin/godot --headless --path . --export-release "Linux" build/linux/BALLISTIK.x86_64
+          test -f build/linux/BALLISTIK.x86_64
+
+      - name: Экспорт Android (.apk, debug-подпись)
+        run: |
+          mkdir -p build/android
+          ~/godot-bin/godot --headless --path . --export-debug "Android" build/android/BALLISTIK-debug.apk
+          test -f build/android/BALLISTIK-debug.apk
+          ls -la build/*
+
+      - name: Артефакт — Windows
+        uses: actions/upload-artifact@v7
+        with:
+          name: BALLISTIK-windows
+          path: build/windows
+
+      - name: Артефакт — Linux
+        uses: actions/upload-artifact@v7
+        with:
+          name: BALLISTIK-linux
+          path: build/linux
+
+      - name: Артефакт — Android
+        uses: actions/upload-artifact@v7
+        with:
+          name: BALLISTIK-android
+          path: build/android
+
+  release:
+    name: Публикация релиза (теги v*)
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: export
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+      - name: Архивы
+        run: |
+          cd dist
+          zip -qr BALLISTIK-windows.zip BALLISTIK-windows
+          zip -qr BALLISTIK-linux.zip BALLISTIK-linux
+          cp BALLISTIK-android/BALLISTIK-debug.apk BALLISTIK-android-debug.apk
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            dist/BALLISTIK-windows.zip
+            dist/BALLISTIK-linux.zip
+            dist/BALLISTIK-android-debug.apk

@@ -1,0 +1,15 @@
+# Нормализация переводов строк (рекомендация Godot)
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.ogg binary
+*.wav binary
+*.ttf binary
+*.otf binary
+*.woff2 binary
+*.tpz binary
+*.apk binary
+*.aab binary
+*.exe binary
+*.pck binary
