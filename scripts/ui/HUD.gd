@@ -11,7 +11,7 @@ extends CanvasLayer
 const HELP_TEXT := """[b]УПРАВЛЕНИЕ (ПК)[/b]
 [color=#ffb020]Общее:[/color] ЛКМ / Пробел — основное оружие · ПКМ / F — дополнительное · G / СКМ — тактическая карта (баллистика, Х-59) · X — ловушки · Z — зум · T — радар 3D/2D · Tab — счёт · Esc — пауза · F1 — справка
 [color=#ffb020]Авиация:[/color] мышь — направление полёта · W/S — газ · A/D — крен · Q/E — рыскание · стрелки — ручное управление · C — камера (наведение мышью / прямое управление)
-[color=#ffb020]Наземная ПВО и катера:[/color] W/S — ход · A/D — поворот · мышь — обзор и прицел. ЗРК: удерживайте цель в прицеле до захвата, затем ЛКМ — пуск
+[color=#ffb020]Наземная ПВО и флот:[/color] W/S — ход · A/D — поворот · мышь — обзор и прицел. ЗУР: удерживайте цель в прицеле до захвата, затем пуск · корабли: ЛКМ — главный калибр, ПКМ — ЗУР или торпеды, зенитки стреляют сами
 [color=#ffb020]Тактическая карта:[/color] ЛКМ — поставить метку · повторный ЛКМ по метке / Enter — пуск · колесо — масштаб · WASD — сдвиг карты · ПКМ / G — выход
 [color=#ffb020]Геймпад:[/color] левый стик — движение, правый — обзор, триггеры — оружие, A — карта, B — ловушки"""
 
@@ -366,12 +366,7 @@ func on_player_vehicle(v: Vehicle) -> void:
 		row.add_child(bar)
 		_weapons_box.add_child(row)
 		_weapon_rows.append({"weapon": w, "ammo": ammo_l, "bar": bar})
-	var range_m := 5000.0
-	if v.category == GameDB.Category.AIR:
-		range_m = 8000.0
-	elif v.vehicle_type == "sam":
-		range_m = 7000.0
-	radar.range_m = range_m
+	radar.range_m = v.get_radar_range()
 	touch_controls.configure(v.category, v)
 	if not v.health_changed.is_connected(_on_player_health_changed):
 		v.health_changed.connect(_on_player_health_changed)

@@ -525,7 +525,7 @@ static func char_model(node: Node) -> void:
 
 
 ## Остов из реальной модели техники: модель перекрашивается, горит; на воде — тонет.
-static func spawn_model_wreck(model: Node3D, sinking: bool, lifetime: float = 26.0) -> void:
+static func spawn_model_wreck(model: Node3D, sinking: bool, lifetime: float = 26.0, sink_depth: float = 25.0) -> void:
 	var parent := _parent()
 	if parent == null or model == null or not model.is_inside_tree():
 		return
@@ -540,8 +540,9 @@ static func spawn_model_wreck(model: Node3D, sinking: bool, lifetime: float = 26
 	root.add_child(fire)
 	if sinking:
 		var tw := root.create_tween()
-		tw.tween_property(root, "position:y", root.position.y - 25.0, 9.0).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-		tw.parallel().tween_property(root, "rotation:z", root.rotation.z + 0.5, 9.0)
+		var sink_time := 9.0 + sink_depth * 0.15
+		tw.tween_property(root, "position:y", root.position.y - sink_depth, sink_time).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		tw.parallel().tween_property(root, "rotation:z", root.rotation.z + 0.5, sink_time)
 		tw.tween_callback(root.queue_free)
 	else:
 		_auto_free(root, lifetime)

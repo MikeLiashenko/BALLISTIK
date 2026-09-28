@@ -106,7 +106,7 @@ func _draw() -> void:
 				if not mode_3d or absf(pos3.y - center.y) > 150.0:
 					draw_string(_font, p + Vector2(6.0, -4.0), str(int(pos3.y / 100.0)), HORIZONTAL_ALIGNMENT_LEFT, -1.0, 11, Color(col, 0.9))
 			GameDB.Category.NAVAL:
-				var half := 6.0 if v.vehicle_type == "warship" else 4.0
+				var half := 6.0 if GameDB.is_major_ship(v.vehicle_type) else 4.0
 				draw_rect(Rect2(p - Vector2(half, half), Vector2(half, half) * 2.0), col)
 			_:
 				draw_circle(p, 4.2, col)

@@ -11,8 +11,11 @@ const TIPS := [
 	"Поршневые истребители виражат лучше реактивных — не тяните бой на малой скорости с «Зеро».",
 	"G — тактическая карта: баллистические ракеты катеров и управляемые ракеты бьют по метке.",
 	"Ловушки (X) отводят ракеты с тепловой ГСН. На поршневых самолётах ловушек нет.",
-	"Эсминцы — главные цели: торпеды, бомбы и крылатые ракеты наносят им повышенный урон.",
+	"Флагманы-крейсера — главные цели: торпеды, бомбы и крылатые ракеты наносят им повышенный урон.",
 	"ЗРК захватывает цель, пока она в прицеле. Прячьтесь за рельефом — радар не видит сквозь горы.",
+	"Радиокомандные ЗУР «Тунгуски», «Панциря» и «Тора» почти не реагируют на ловушки, а «Стингер» — реагирует.",
+	"Эпоха боя меняет всю технику: в 1940-е — зенитки «ахт-ахт» и торпедные катера, в реактивную — ЗРК и эсминцы УРО.",
+	"С-300 поднимает контейнеры только на стоянке — остановитесь перед пуском.",
 	"Бомбы падают в кольцо CCIP: ведите метку на цель и сбрасывайте в момент совмещения.",
 	"Выберите технику, занятую ботом своей команды, — бот уступит место.",
 	"Уровень «Новобранец» — для спокойного освоения: боты медлят и часто промахиваются.",
@@ -143,10 +146,17 @@ func _build_main() -> void:
 	UITheme.glow_label(_title, UITheme.NEON, 4, 22)
 	left.add_child(_title)
 	var planes := 0
+	var air_defense := 0
+	var ships := GameDB.FLAGSHIP_ORDER.size()
 	for t: String in GameDB.VEHICLE_ORDER:
-		if GameDB.is_aircraft(t):
-			planes += 1
-	left.add_child(UITheme.make_label("%d самолётов 1940–2020-х  ·  %d карт  ·  процедурные миры" % [planes, MapPresets.ORDER.size()], 17, UITheme.TEXT_DIM))
+		match GameDB.category_of(t):
+			GameDB.Category.AIR:
+				planes += 1
+			GameDB.Category.GROUND:
+				air_defense += 1
+			_:
+				ships += 1
+	left.add_child(UITheme.make_label("%d самолётов  ·  %d систем ПВО  ·  %d кораблей и катеров  ·  %d карт" % [planes, air_defense, ships, MapPresets.ORDER.size()], 17, UITheme.TEXT_DIM))
 	var sep := UITheme.separator(UITheme.NEON_DIM)
 	sep.custom_minimum_size = Vector2(540.0, 2.0)
 	left.add_child(sep)
@@ -343,7 +353,7 @@ func _build_lobby_left() -> Control:
 		_map_thumbs[map_id] = thumb
 	box.add_child(UITheme.separator())
 	box.add_child(UITheme.section_title("ПАРАМЕТРЫ БОЯ"))
-	_add_option(box, "Авиация", GameDB.ERA_NAMES, GameSettings.air_era, _on_era)
+	_add_option(box, "Эпоха", GameDB.ERA_NAMES, GameSettings.air_era, _on_era)
 	_add_option(box, "Боты", _difficulty_names(), GameSettings.difficulty, _on_difficulty)
 	var sizes: Array = []
 	for n in range(3, 17):
@@ -486,23 +496,26 @@ func _build_hangar() -> void:
 	list.add_theme_constant_override("separation", 4)
 	list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(list)
-	var sections := [["ПОРШНЕВЫЕ ИСТРЕБИТЕЛИ", "fighter", "prop"], ["РЕАКТИВНЫЕ ИСТРЕБИТЕЛИ", "fighter", "jet"], ["УДАРНЫЕ САМОЛЁТЫ", "strike", ""], ["ПВО И ФЛОТ", "", ""]]
+	var sections: Array = []
+	sections.append(["ПОРШНЕВЫЕ ИСТРЕБИТЕЛИ", _hangar_types(GameDB.Category.AIR, "fighter", "prop")])
+	sections.append(["РЕАКТИВНЫЕ ИСТРЕБИТЕЛИ", _hangar_types(GameDB.Category.AIR, "fighter", "jet")])
+	sections.append(["УДАРНЫЕ САМОЛЁТЫ", _hangar_types(GameDB.Category.AIR, "strike", "")])
+	sections.append(["НАЗЕМНАЯ ПВО · 1940-е", _hangar_types(GameDB.Category.GROUND, "", "prop")])
+	sections.append(["НАЗЕМНАЯ ПВО · РЕАКТИВНАЯ ЭРА", _hangar_types(GameDB.Category.GROUND, "", "jet")])
+	sections.append(["ФЛОТ · 1940-е", _hangar_types(GameDB.Category.NAVAL, "", "prop")])
+	sections.append(["ФЛОТ · РЕАКТИВНАЯ ЭРА", _hangar_types(GameDB.Category.NAVAL, "", "jet")])
+	sections.append(["ФЛАГМАНЫ (СТРАТЕГИЧЕСКИЕ ЦЕЛИ)", GameDB.FLAGSHIP_ORDER.duplicate()])
 	var list_group := ButtonGroup.new()
 	var first := ""
 	for sec: Array in sections:
 		list.add_child(UITheme.section_title(str(sec[0]), 13))
-		for t: String in GameDB.VEHICLE_ORDER:
+		for t: String in sec[1]:
 			var info := GameDB.vehicle_info(t)
-			var role := str(sec[1])
-			var era := str(sec[2])
-			if role == "" and GameDB.is_aircraft(t):
-				continue
-			if role != "" and GameDB.role_of(t) != role:
-				continue
-			if era != "" and str(info.get("era", "")) != era:
-				continue
 			var b := UITheme.make_button(GameDB.vehicle_name(t, 0), Vector2(0.0, 36.0), 15)
 			b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+			b.clip_text = true
+			b.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+			b.tooltip_text = "%s — %s" % [GameDB.vehicle_name(t, 0), GameDB.vehicle_role(t)]
 			b.toggle_mode = true
 			b.button_group = list_group
 			b.icon = IconFactory.get_icon(str(info.get("icon", "fighter")), 24, UITheme.NEON)
@@ -549,6 +562,20 @@ func _build_hangar() -> void:
 	_hangar.set_meta("first", first)
 
 
+## Типы техники для раздела ангара: категория, роль ("" — любая), эпоха ("" — любая).
+func _hangar_types(category: int, role: String, era: String) -> Array[String]:
+	var result: Array[String] = []
+	for t: String in GameDB.VEHICLE_ORDER:
+		if GameDB.category_of(t) != category:
+			continue
+		if role != "" and GameDB.role_of(t) != role:
+			continue
+		if era != "" and str(GameDB.vehicle_info(t).get("era", "")) != era:
+			continue
+		result.append(t)
+	return result
+
+
 func _vehicle_text(type_id: String) -> Dictionary:
 	var info := GameDB.vehicle_info(type_id)
 	var sub := GameDB.vehicle_role(type_id)
@@ -556,10 +583,19 @@ func _vehicle_text(type_id: String) -> Dictionary:
 	if nation != "":
 		sub += " · " + nation
 	var extra := ""
+	var mv: Dictionary = info.get("move", {})
 	if GameDB.is_aircraft(type_id):
 		var fl: Dictionary = info.get("flight", {})
 		extra = "Макс. скорость %d км/ч · прочность %d" % [int(float(fl.get("max", 0.0)) * 3.6), int(float(info.get("hp", 0.0)))]
 		sub += " · " + ("реактивный" if str(info.get("era", "")) == "jet" else "поршневой")
+	elif GameDB.category_of(type_id) == GameDB.Category.NAVAL:
+		extra = "Ход %d уз · прочность %d" % [int(float(mv.get("speed", 0.0)) * 1.944), int(float(info.get("hp", 0.0)))]
+		if GameDB.is_flagship(type_id):
+			extra += " · флагман не занимает слот и не возрождается"
+	elif float(mv.get("speed", 0.0)) <= 0.0:
+		extra = "Стационарная позиция · прочность %d" % int(float(info.get("hp", 0.0)))
+	else:
+		extra = "Скорость %d км/ч · прочность %d" % [int(float(mv.get("speed", 0.0)) * 3.6), int(float(info.get("hp", 0.0)))]
 	return {"name": GameDB.vehicle_name(type_id, _hangar_team), "sub": sub, "desc": str(info.get("desc", "")), "weapons": str(info.get("weapons", "")), "extra": extra, "stats": info.get("stats", [0.5, 0.5, 0.5, 0.5])}
 
 

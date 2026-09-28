@@ -56,7 +56,7 @@ func _acquire_near(point: Vector3) -> Node3D:
 		if v.category == GameDB.Category.AIR:
 			continue
 		var s := v.global_position.distance_to(point)
-		if v.vehicle_type == "warship" or v.vehicle_type == "sam":
+		if GameDB.is_major_ship(v.vehicle_type) or GameDB.role_of(v.vehicle_type) == "sam":
 			s *= 0.5
 		if s < best_score:
 			best_score = s

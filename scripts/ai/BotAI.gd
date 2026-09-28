@@ -1,13 +1,15 @@
 class_name BotAI
 extends Node
 ## ИИ бота:
-##  * выбор свободного слота техники по потребностям команды (роли: истребитель, ударный, ЗСУ, ЗРК, катер);
+##  * выбор свободного слота техники по потребностям команды (роли: истребитель, ударный, ЗСУ, ЗРК,
+##    зенитное орудие, катер, корабль);
 ##  * патрулирование по раскладке карты: авиация — между базами на высоте, флот — акватория,
-##    ПВО — точки обороны своей базы;
+##    ПВО — точки обороны своей базы (зенитные орудия стоят на позиции);
 ##  * обнаружение с учётом дальности, прямой видимости и времени реакции (уровень сложности);
 ##  * стрельба с упреждением (BallisticSolver) и ошибкой наводки; пуски ракет с задержкой;
 ##  * тактика: воздушный бой, штурмовка (пушки, НАР, бомбы по CCIP, УР по цели и по метке),
-##    захват целей ЗРК, торпедные и баллистические удары катеров, уклонение от ракет с ловушками.
+##    захват целей ЗРК и пушечно-ракетными комплексами, торпедные атаки и удары по метке (баллистика,
+##    залпы РС, ПКР), артиллерийский бой кораблей на дистанции, уклонение от ракет с ловушками.
 ## Уровни сложности заметно мягче прежних: боты промахиваются, медлят и реже выбирают целью игрока.
 
 var vehicle: Vehicle = null
@@ -15,6 +17,8 @@ var terrain: Terrain = null
 var layout: MapLayout = null
 var difficulty: Dictionary = {}
 var target: Node3D = null
+## Воздушная цель ЗУР корабля (отдельно от цели главного калибра).
+var air_target: Vehicle = null
 var waypoint: Vector3 = Vector3.ZERO
 var rng := RandomNumberGenerator.new()
 
@@ -41,7 +45,7 @@ var _scan_yaw: float = 0.0
 ## ударная авиация против флота и ПВО), затем случайный свободный тип внутри роли.
 static func choose_vehicle_type(manager: Node, team: int, p_rng: RandomNumberGenerator) -> String:
 	var enemy := GameDB.enemy_team(team)
-	var weights := {"fighter": 1.1, "strike": 0.75, "spaag": 0.95, "sam": 0.8, "boat": 1.0}
+	var weights := {"fighter": 1.1, "strike": 0.75, "spaag": 0.95, "sam": 0.8, "flak": 0.6, "boat": 1.0, "ship": 0.7}
 	var enemy_air := 0
 	var enemy_strike := 0
 	var enemy_naval := 0
@@ -55,13 +59,15 @@ static func choose_vehicle_type(manager: Node, team: int, p_rng: RandomNumberGen
 	else:
 		enemy_air = int(manager.call("role_count", enemy, "fighter")) + int(manager.call("role_count", enemy, "strike"))
 		enemy_strike = int(manager.call("role_count", enemy, "strike"))
-		enemy_naval = int(manager.call("role_count", enemy, "boat")) + 1
-		enemy_ground = int(manager.call("role_count", enemy, "spaag")) + int(manager.call("role_count", enemy, "sam"))
+		enemy_naval = int(manager.call("role_count", enemy, "boat")) + int(manager.call("role_count", enemy, "ship")) + 1
+		enemy_ground = int(manager.call("role_count", enemy, "spaag")) + int(manager.call("role_count", enemy, "sam")) + int(manager.call("role_count", enemy, "flak"))
 	weights["spaag"] = float(weights["spaag"]) + 0.3 * enemy_air
 	weights["sam"] = float(weights["sam"]) + 0.25 * enemy_air
+	weights["flak"] = float(weights["flak"]) + 0.2 * enemy_air
 	weights["fighter"] = float(weights["fighter"]) + 0.35 * enemy_air + 0.5 * enemy_strike
 	weights["strike"] = float(weights["strike"]) + 0.25 * enemy_naval + 0.2 * enemy_ground
 	weights["boat"] = float(weights["boat"]) + 0.3 * enemy_naval
+	weights["ship"] = float(weights["ship"]) + 0.2 * enemy_naval + 0.1 * enemy_ground
 	var by_role: Dictionary = {}
 	for t: String in GameDB.VEHICLE_ORDER:
 		if not bool(manager.call("is_slot_free", team, t)):
@@ -128,14 +134,12 @@ func _physics_process(delta: float) -> void:
 			_drive_strike(delta)
 		else:
 			_drive_fighter(delta)
-		return
-	match vehicle.vehicle_type:
-		"spaag":
-			_drive_spaag(delta)
-		"sam":
-			_drive_sam()
-		"boat":
-			_drive_boat(delta)
+	elif vehicle is AirDefense:
+		_drive_air_defense(delta)
+	elif vehicle is Boat:
+		_drive_boat(delta)
+	elif vehicle is Warship:
+		_drive_ship(delta)
 
 
 func _initialize() -> void:
@@ -143,8 +147,10 @@ func _initialize() -> void:
 	terrain = vehicle.terrain
 	layout = terrain.layout
 	_last_pos = vehicle.global_position
-	if vehicle is SAMLauncher:
-		(vehicle as SAMLauncher).lock_time_scale = float(difficulty.get("lock_time", 1.4))
+	if vehicle is AirDefense:
+		(vehicle as AirDefense).lock_time_scale = float(difficulty.get("lock_time", 1.4))
+	elif vehicle is Warship:
+		(vehicle as Warship).lock_time_scale = float(difficulty.get("lock_time", 1.4))
 	match vehicle.category:
 		GameDB.Category.AIR:
 			waypoint = _air_patrol_point()
@@ -163,14 +169,27 @@ func _think() -> void:
 			target = _pick_strike_target()
 		else:
 			target = _pick_target((5000.0 if a.is_prop() else 5500.0) * detect, "fighter")
-	else:
-		match vehicle.vehicle_type:
-			"spaag":
-				target = _pick_target(2600.0 * detect, "spaag")
-			"sam":
-				target = _pick_target(6500.0 * detect, "air")
-			"boat":
-				target = _pick_target(2100.0 * detect, "boat")
+	elif vehicle is AirDefense:
+		var ad := vehicle as AirDefense
+		if ad.has_missiles():
+			target = _pick_target(ad.missile_range * 0.95 * detect, "air")
+			if target == null and ad.has_guns():
+				target = _pick_target((ad.gun_range() + 300.0) * detect, "spaag")
+		else:
+			target = _pick_target((ad.gun_range() + 300.0) * detect, "spaag" if not ad.is_static() else "air")
+	elif vehicle is Boat:
+		var b := vehicle as Boat
+		target = _pick_target(2100.0 * detect, "boat")
+		if target == null and float(b.cfg.get("guns", {}).get("prox", 0.0)) > 0.0:
+			target = _pick_target(b.gun_range() * detect, "air")
+	elif vehicle is Warship:
+		var s := vehicle as Warship
+		target = _pick_target(s.gun_range() * 1.2 * detect, "ship")
+		if s.has_sam():
+			var prev_air := air_target
+			air_target = _pick_target(s.sam_range() * 0.9 * detect, "air")
+			if air_target != prev_air:
+				_missile_cooldown = maxf(_missile_cooldown, float(difficulty.get("reaction", 1.0)))
 	if target != previous:
 		_reaction_timer = float(difficulty.get("reaction", 1.0)) * rng.randf_range(0.7, 1.3)
 	_check_stuck()
@@ -219,14 +238,14 @@ func _pick_target(max_range: float, mode: String) -> Vehicle:
 			"fighter":
 				if v.category == GameDB.Category.AIR:
 					factor = 0.5 if GameDB.role_of(v.vehicle_type) == "strike" else 0.65
-				elif v.vehicle_type == "warship" or d > 2600.0:
+				elif GameDB.is_major_ship(v.vehicle_type) or d > 2600.0:
 					continue
 				else:
 					factor = 1.7
 			"spaag":
 				if v.category == GameDB.Category.AIR:
 					factor = 0.5
-				elif d > 1600.0 or v.vehicle_type == "warship":
+				elif d > 1600.0 or GameDB.is_major_ship(v.vehicle_type):
 					continue
 			"air":
 				if v.category != GameDB.Category.AIR:
@@ -234,10 +253,17 @@ func _pick_target(max_range: float, mode: String) -> Vehicle:
 			"boat":
 				if v.category == GameDB.Category.AIR:
 					continue
-				if v.vehicle_type == "warship":
+				if GameDB.is_major_ship(v.vehicle_type):
 					factor = 0.55
 				elif v.category == GameDB.Category.GROUND:
 					factor = 1.4
+			"ship":
+				if v.category == GameDB.Category.AIR:
+					continue
+				if GameDB.is_major_ship(v.vehicle_type):
+					factor = 0.6
+				elif v.category == GameDB.Category.GROUND:
+					factor = 1.2
 		if not terrain.line_of_sight(pos, v.global_position + Vector3.UP * 2.0):
 			continue
 		var score := d * factor * _focus(v)
@@ -258,12 +284,14 @@ func _pick_strike_target() -> Node3D:
 		if v.category == GameDB.Category.AIR:
 			continue
 		var pri := 1.2
-		match v.vehicle_type:
-			"warship":
+		match GameDB.role_of(v.vehicle_type):
+			"flagship":
 				pri = 0.45
+			"ship":
+				pri = 0.5
 			"sam":
 				pri = 0.55
-			"spaag":
+			"spaag", "flak":
 				pri = 0.7
 		var s := pos.distance_to(v.global_position) * pri * _focus(v)
 		if v == target:
@@ -432,7 +460,7 @@ func _drive_strike(delta: float) -> void:
 	elif _valid(target) and _reaction_timer <= 0.0:
 		var tp := target.global_position
 		var dist_flat := GameDB.flat_distance(pos, tp)
-		var priority := target is Warship or target is SAMLauncher or target is AAGun or target is Building
+		var priority := target is Warship or target is AirDefense or target is Building
 		var sp_range := b.get_special_range()
 		if sp_range != Vector2.ZERO and b.special_ready() and _special_cooldown <= 0.0 and priority and dist_flat > sp_range.x + 400.0 and dist_flat < sp_range.y * 0.8:
 			c.special_target = Vector3(tp.x, tp.y + 1.0, tp.z)
@@ -519,48 +547,50 @@ func _scan_point(gv: Vehicle) -> Vector3:
 	return gv.global_position + GameDB.dir_from_yaw_pitch(_scan_yaw, 0.35) * 1500.0
 
 
-func _drive_spaag(delta: float) -> void:
-	var g := vehicle as AAGun
+## Наземная ПВО: пушки — очередями с упреждением; ЗУР — захват и пуск (у пушечно-ракетных комплексов
+## ракеты — по дальним целям, пушки — по ближним); стационарные орудия только разворачиваются.
+func _drive_air_defense(delta: float) -> void:
+	var g := vehicle as AirDefense
 	var c := g.controls
 	c.fire_primary = false
-	var engaging := _valid(target) and _reaction_timer <= 0.0
-	if not engaging:
-		_drive_ground_to(g, waypoint, 25.0)
+	c.fire_secondary = false
+	if not (_valid(target) and _reaction_timer <= 0.0):
+		c.lock_target = null
+		if not g.is_static():
+			_drive_ground_to(g, waypoint, 30.0)
 		c.has_aim = true
 		c.aim_point = _scan_point(g)
 		return
 	var t := target as Vehicle
 	c.throttle = 0.0
 	c.steer = 0.0
-	var origin := g.gun_origin()
-	var lead := BallisticSolver.compute_lead(origin, g.velocity, t.global_position, t.velocity, AAGun.SHELL_SPEED, AAGun.SHELL_DRAG, GameDB.GRAVITY)
-	var aim := _apply_error(origin, lead)
-	c.aim_point = aim
+	var dist := g.global_position.distance_to(t.global_position)
 	c.has_aim = true
-	var dist := origin.distance_to(t.global_position)
-	var max_range := 2300.0 if t.category == GameDB.Category.AIR else 1600.0
-	c.fire_primary = dist < max_range and g.aim_error_to(aim) < 2.0 and _burst(delta, 0.9, 0.7)
-
-
-func _drive_sam() -> void:
-	var s := vehicle as SAMLauncher
-	var c := s.controls
-	c.fire_primary = false
-	if not (_valid(target) and _reaction_timer <= 0.0):
-		c.lock_target = null
-		_drive_ground_to(s, waypoint, 30.0)
-		c.has_aim = true
-		c.aim_point = _scan_point(s)
-		return
-	c.throttle = 0.0
-	c.steer = 0.0
-	c.lock_target = target
-	c.aim_point = target.global_position
-	c.has_aim = true
-	var dist := s.global_position.distance_to(target.global_position)
-	if s.lock_progress >= 1.0 and _special_cooldown <= 0.0 and dist < SAMLauncher.RADAR_RANGE * 0.75 and not _own_missile_on(target):
-		c.fire_primary = true
-		_special_cooldown = rng.randf_range(6.0, 10.0) + float(difficulty.get("missile_delay", 5.0)) * 0.6
+	c.aim_point = t.global_position
+	if g.has_guns():
+		var origin := g.gun_origin()
+		var lead := BallisticSolver.compute_lead(origin, g.velocity, t.global_position, t.velocity, g.gun_speed(), g.gun_drag(), GameDB.GRAVITY)
+		var aim := _apply_error(origin, lead)
+		var max_range := g.gun_range() if t.category == GameDB.Category.AIR else minf(g.gun_range(), 1600.0)
+		var slow := float(g.gun_cfg.get("interval", 0.1)) > 1.0
+		var fire := dist < max_range and g.aim_error_to(aim) < (1.5 if slow else 2.0) and (slow or _burst(delta, 0.9, 0.7))
+		if not g.missiles_primary or not g.has_missiles() or dist < g.gun_range() * 0.8:
+			c.aim_point = aim
+		if g.missiles_primary:
+			c.fire_secondary = fire
+		else:
+			c.fire_primary = fire
+	if g.has_missiles() and t.category == GameDB.Category.AIR:
+		c.lock_target = t
+		var want := g.lock_progress >= 1.0 and _special_cooldown <= 0.0 and dist < g.missile_range * 0.75 and not _own_missile_on(t)
+		if not g.missiles_primary and dist < g.gun_range() * 0.7:
+			want = false
+		if want:
+			if g.missiles_primary:
+				c.fire_primary = true
+			else:
+				c.fire_secondary = true
+			_special_cooldown = rng.randf_range(6.0, 10.0) + float(difficulty.get("missile_delay", 5.0)) * 0.6
 
 
 func _own_missile_on(t: Node3D) -> bool:
@@ -573,7 +603,7 @@ func _own_missile_on(t: Node3D) -> bool:
 
 
 # --- Флот -------------------------------------------------------------------------------------------------------
-## Точка патрулирования в акватории между своим эсминцем и центром карты.
+## Точка патрулирования в акватории между своим флагманом и центром карты.
 func _sea_patrol_point() -> Vector3:
 	var own := layout.warship[vehicle.team]
 	var lim := layout.bounds * 0.92
@@ -585,29 +615,38 @@ func _sea_patrol_point() -> Vector3:
 	return Vector3(own.x, 0.0, own.y)
 
 
-func _pick_ballistic_target(b: PatrolBoat) -> Node3D:
-	var pos := b.global_position
+## Цель удара по метке (баллистика, залп РС, ПКР): корабли, ПВО и важные сооружения в пределах дальности.
+func _pick_special_target(v: Vehicle, r: Vector2, moving_ok: bool) -> Node3D:
+	var pos := v.global_position
 	var best: Node3D = null
 	var best_score := INF
-	for v in GlobalBattleManager.enemies_in_radius(b.team, pos, BallisticMissile.MAX_RANGE - 50.0):
-		if v.category == GameDB.Category.AIR:
+	for e in GlobalBattleManager.enemies_in_radius(v.team, pos, r.y - 50.0):
+		if e.category == GameDB.Category.AIR:
 			continue
-		var d := GameDB.flat_distance(pos, v.global_position)
-		if d < BallisticMissile.MIN_RANGE + 60.0:
+		var d := GameDB.flat_distance(pos, e.global_position)
+		if d < r.x + 60.0:
 			continue
 		var pri := 1.0
-		if v is Warship:
-			pri = 0.45
-		elif v is SAMLauncher:
-			pri = 0.6
-		elif v is AAGun:
-			pri = 0.7
-		if d * pri * _focus(v) < best_score:
-			best_score = d * pri * _focus(v)
-			best = v
-	for s in GlobalBattleManager.enemy_structures_in_radius(b.team, pos, BallisticMissile.MAX_RANGE - 50.0):
+		match GameDB.role_of(e.vehicle_type):
+			"flagship":
+				pri = 0.4
+			"ship":
+				pri = 0.5
+			"sam":
+				pri = 0.6
+			"spaag", "flak":
+				pri = 0.7
+			"boat":
+				if not moving_ok:
+					continue
+				pri = 1.3
+		var score := d * pri * _focus(e)
+		if score < best_score:
+			best_score = score
+			best = e
+	for s in GlobalBattleManager.enemy_structures_in_radius(v.team, pos, r.y - 50.0):
 		var d := GameDB.flat_distance(pos, s.global_position)
-		if d < BallisticMissile.MIN_RANGE + 60.0:
+		if d < r.x + 60.0:
 			continue
 		var score := d * (0.8 if s.score_value >= 40 else 1.15)
 		if score < best_score:
@@ -616,30 +655,42 @@ func _pick_ballistic_target(b: PatrolBoat) -> Node3D:
 	return best
 
 
+## Удар по метке с упреждением цели и ошибкой по сложности.
+func _try_special_strike(v: Vehicle, eta_speed: float, moving_ok: bool) -> void:
+	if not v.special_ready() or _special_cooldown > 0.0:
+		return
+	var st := _pick_special_target(v, v.get_special_range(), moving_ok)
+	if st == null:
+		return
+	var pos := v.global_position
+	var tp := st.global_position
+	if st is Vehicle:
+		var eta := 6.0 + GameDB.flat_distance(pos, tp) / eta_speed
+		tp += (st as Vehicle).velocity * eta
+	tp += Vector3(rng.randf_range(-1.0, 1.0), 0.0, rng.randf_range(-1.0, 1.0)) * float(difficulty.get("aim_error_deg", 3.0)) * 12.0
+	var c := v.controls
+	c.special_target = Vector3(tp.x, terrain.get_surface_height(tp.x, tp.z), tp.z)
+	c.fire_special = true
+	_special_cooldown = rng.randf_range(12.0, 20.0) + float(difficulty.get("missile_delay", 5.0))
+
+
 func _drive_boat(delta: float) -> void:
-	var b := vehicle as PatrolBoat
+	var b := vehicle as Boat
 	var c := b.controls
 	var pos := b.global_position
 	c.fire_primary = false
 	c.fire_secondary = false
-	if b.ballistic.can_fire() and _special_cooldown <= 0.0:
-		var st := _pick_ballistic_target(b)
-		if st != null:
-			var tp := st.global_position
-			if st is Vehicle:
-				var eta := 8.0 + GameDB.flat_distance(pos, tp) / 400.0
-				tp += (st as Vehicle).velocity * eta
-			tp += Vector3(rng.randf_range(-1.0, 1.0), 0.0, rng.randf_range(-1.0, 1.0)) * float(difficulty.get("aim_error_deg", 3.0)) * 12.0
-			c.special_target = Vector3(tp.x, terrain.get_surface_height(tp.x, tp.z), tp.z)
-			c.fire_special = true
-			_special_cooldown = rng.randf_range(12.0, 20.0) + float(difficulty.get("missile_delay", 5.0))
+	var sp_type := str(b.special_cfg.get("type", ""))
+	_try_special_strike(b, 400.0 if sp_type == "ballistic" else 260.0, sp_type == "cruise")
 	var dest := waypoint
 	c.has_aim = false
 	if _valid(target) and _reaction_timer <= 0.0:
 		var t := target as Vehicle
 		var tp := t.global_position
 		var dist := GameDB.flat_distance(pos, tp)
-		if t is Warship:
+		var has_torpedoes := b.torpedoes != null
+		if GameDB.is_major_ship(t.vehicle_type) and has_torpedoes:
+			# Торпедная атака: выход на курс перехвата, пуск, отворот.
 			var lead := tp + t.velocity * (dist / 34.0)
 			dest = lead
 			var ang := rad_to_deg(b.get_forward().angle_to(GameDB.flat(lead - pos)))
@@ -649,18 +700,24 @@ func _drive_boat(delta: float) -> void:
 				dest = pos + b.get_forward().rotated(Vector3.UP, PI * 0.5) * 700.0
 		else:
 			var origin := b.gun_origin()
-			var lead := BallisticSolver.compute_lead(origin, b.velocity, tp, t.velocity, PatrolBoat.MG_SPEED, PatrolBoat.MG_DRAG, GameDB.GRAVITY)
+			var lead := BallisticSolver.compute_lead(origin, b.velocity, tp, t.velocity, b.gun_speed(), b.gun_drag(), GameDB.GRAVITY)
 			var aim := _apply_error(origin, lead)
 			c.aim_point = aim
 			c.has_aim = true
 			var err := rad_to_deg(b.gun_direction().angle_to(aim - origin))
-			c.fire_primary = dist < 900.0 and err < 3.0 and _burst(delta, 0.7, 0.6)
+			var gun_reach := minf(b.gun_range(), 2000.0) * (1.0 if t.category == GameDB.Category.AIR else 0.85)
+			c.fire_primary = dist < gun_reach and (err < 3.0 or b.guns_ready()) and _burst(delta, 0.7, 0.6)
+			if b.guns2 != null and not has_torpedoes:
+				var r2 := float(b.cfg.get("guns2", {}).get("range", 1200.0))
+				c.fire_secondary = dist < r2 and t.category != GameDB.Category.AIR and _burst(delta, 0.8, 0.8)
 			var to := GameDB.flat(tp - pos)
-			if dist > 520.0:
+			if t.category == GameDB.Category.AIR:
+				dest = waypoint
+			elif dist > 520.0:
 				dest = tp
 			else:
 				dest = pos + to.normalized().rotated(Vector3.UP, PI * 0.5) * 320.0
-			if t.category == GameDB.Category.NAVAL and dist < 650.0 and b.torpedoes.can_fire():
+			if has_torpedoes and t.category == GameDB.Category.NAVAL and dist < 650.0 and b.torpedoes.can_fire():
 				var ang2 := rad_to_deg(b.get_forward().angle_to(to))
 				c.fire_secondary = ang2 < 5.0
 	elif GameDB.flat_distance(pos, waypoint) < 160.0:
@@ -668,25 +725,70 @@ func _drive_boat(delta: float) -> void:
 	if not c.has_aim:
 		c.has_aim = true
 		c.aim_point = pos + b.get_forward() * 600.0 + Vector3.UP * 20.0
-	_steer_boat(b, dest)
+	_steer_water(b, b.heading, dest, 170.0, 6.0)
 
 
-## Руление катера к точке с обходом суши (веер лучей вперёд).
-func _steer_boat(b: PatrolBoat, dest: Vector3) -> void:
-	var c := b.controls
-	var pos := b.global_position
+## Корабль: артиллерийский бой на дистанции (главный калибр по навесной), ЗУР по авиации, торпедный
+## веер по кораблям, ПКР по метке; держится на 60–70 % дальности орудий и маневрирует бортом к цели.
+func _drive_ship(delta: float) -> void:
+	var s := vehicle as Warship
+	var c := s.controls
+	var pos := s.global_position
+	c.fire_primary = false
+	c.fire_secondary = false
+	c.lock_target = null
+	_try_special_strike(s, 280.0, true)
+	var dest := waypoint
+	c.has_aim = false
+	if s.has_sam() and _valid(air_target):
+		c.lock_target = air_target
+		var da := pos.distance_to(air_target.global_position)
+		if s.lock_progress >= 1.0 and _missile_cooldown <= 0.0 and da < s.sam_range() * 0.8 and not _own_missile_on(air_target):
+			c.fire_secondary = true
+			_missile_cooldown = rng.randf_range(6.0, 10.0) + float(difficulty.get("missile_delay", 5.0))
+		if not _valid(target):
+			c.has_aim = true
+			c.aim_point = air_target.global_position
+	if _valid(target) and _reaction_timer <= 0.0:
+		var tp := target.global_position
+		var dist := GameDB.flat_distance(pos, tp)
+		var tv := (target as Vehicle).velocity if target is Vehicle else Vector3.ZERO
+		var lead := tp + tv * (dist / s.gun_speed()) * 1.1
+		lead += _aim_offset * dist * 0.35
+		c.aim_point = Vector3(lead.x, terrain.get_surface_height(lead.x, lead.z) + 1.5, lead.z)
+		c.has_aim = true
+		c.fire_primary = dist < s.gun_range() and _burst(delta, 2.5, 1.2)
+		if s.torpedoes != null and target is Vehicle and (target as Vehicle).category == GameDB.Category.NAVAL and dist < 2400.0 and s.torpedoes.can_fire() and not c.fire_secondary:
+			c.fire_secondary = true
+		var to := GameDB.flat(tp - pos)
+		if dist > s.gun_range() * 0.7:
+			dest = tp
+		else:
+			dest = pos + to.normalized().rotated(Vector3.UP, PI * 0.5) * 900.0
+	elif GameDB.flat_distance(pos, waypoint) < 350.0:
+		waypoint = _sea_patrol_point()
+	if not c.has_aim:
+		c.has_aim = true
+		c.aim_point = pos + s.get_forward() * 2000.0
+	_steer_water(s, s.heading, dest, maxf(s.length() * 2.5, 350.0), maxf(s.length() * 0.12, 12.0))
+
+
+## Руление по воде к точке с обходом суши (веер лучей вперёд длиной reach, запас от берега margin).
+func _steer_water(v: Vehicle, heading: float, dest: Vector3, reach: float, margin: float) -> void:
+	var c := v.controls
+	var pos := v.global_position
 	var to := GameDB.flat(dest - pos)
-	var desired := GameDB.yaw_of(to) if to.length() > 1.0 else b.heading
+	var desired := GameDB.yaw_of(to) if to.length() > 1.0 else heading
 	var best_yaw := desired
 	var found := false
 	for offset: float in [0.0, 0.35, -0.35, 0.7, -0.7, 1.1, -1.1, 1.6, -1.6, 2.2, -2.2, PI]:
 		var yaw := desired + offset
 		var dir := Vector3(-sin(yaw), 0.0, -cos(yaw))
-		if _water_clear(pos, dir, 170.0):
+		if _water_clear(pos, dir, reach, margin):
 			best_yaw = yaw
 			found = true
 			break
-	var diff := wrapf(best_yaw - b.heading, -PI, PI)
+	var diff := wrapf(best_yaw - heading, -PI, PI)
 	c.steer = clampf(-diff * 2.0, -1.0, 1.0)
 	c.throttle = 1.0 if absf(diff) < 1.0 else 0.45
 	if not found:
@@ -695,9 +797,9 @@ func _steer_boat(b: PatrolBoat, dest: Vector3) -> void:
 		c.throttle = 0.3
 
 
-func _water_clear(pos: Vector3, dir: Vector3, dist: float) -> bool:
+func _water_clear(pos: Vector3, dir: Vector3, dist: float, margin: float) -> bool:
 	for i in range(1, 5):
 		var p := pos + dir * dist * float(i) / 4.0
-		if not terrain.is_navigable(p.x, p.z, 6.0):
+		if not terrain.is_navigable(p.x, p.z, margin):
 			return false
 	return true

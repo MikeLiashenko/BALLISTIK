@@ -308,7 +308,7 @@ func exit_tactical() -> void:
 func _create_tactical_visuals(max_range: float) -> void:
 	var parent := level.fx_root
 	_marker = TacticalMarker.new()
-	_marker_blast_radius = 38.0 if vehicle is PatrolBoat else 24.0
+	_marker_blast_radius = vehicle.get_special_blast()
 	_marker.radius = _marker_blast_radius
 	_marker.visible = false
 	parent.add_child(_marker)
@@ -415,23 +415,12 @@ func _rebuild_arc(origin: Vector3, in_range: bool) -> void:
 	tactical_valid = false
 	if not in_range:
 		return
-	var pts := PackedVector3Array()
-	var eta := 0.0
 	var d := GameDB.flat_distance(origin, tactical_point)
-	if vehicle is PatrolBoat:
-		var v0 := BallisticMissile.solve(origin, tactical_point)
-		if v0 == Vector3.ZERO:
-			return
-		pts = BallisticMissile.predict(origin, v0, level.terrain)
-		eta = BallisticMissile.flight_time(origin, v0, tactical_point.y)
-	else:
-		var steps := 24
-		for i in steps + 1:
-			var k := float(i) / float(steps)
-			var p := origin.lerp(tactical_point, k)
-			p.y = lerpf(origin.y, tactical_point.y, k) + sin(k * PI) * 60.0
-			pts.append(p)
-		eta = d / 280.0
+	var arc := vehicle.get_special_arc(origin, tactical_point)
+	if arc.is_empty():
+		return
+	var pts: PackedVector3Array = arc["points"]
+	var eta := float(arc["eta"])
 	tactical_valid = true
 	_marker_text = "%s · %.1f с" % [GameDB.format_distance(d), eta]
 	tactical_info = "ЦЕЛЬ: %s · ПОДЛЁТ %.1f с · ПУСК — повторный клик / Enter" % [GameDB.format_distance(d), eta]

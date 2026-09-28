@@ -4,15 +4,15 @@ extends Node3D
 ##  * рельеф (Terrain + TerrainMeshBuilder: чанки с LOD) — в фоновом потоке, с экраном загрузки;
 ##  * атмосфера (небо, солнце, туман, тонмаппинг), море до горизонта, кучевые облака и их тени;
 ##  * леса и рощи (MultiMesh), базы обеих команд, деревни, посёлки, маяки, нефтяные платформы;
-##  * эсминцы команд, точки спавна, камера, управление игрока и HUD.
+##  * флагманы команд (крейсера под встроенным ИИ), точки спавна, камера, управление игрока и HUD.
 ## После генерации уровень передаётся в GlobalBattleManager.
 
-const WARSHIP_NAMES := ["«Буревестник»", "«Грозный»"]
 const TIPS := [
-	"Тактическая карта (G): баллистические и крылатые ракеты бьют по метке на карте.",
-	"Ловушки (X) сбивают с курса ракеты с тепловой головкой самонаведения.",
+	"Тактическая карта (G): баллистические, крылатые ракеты и залпы РС бьют по метке на карте.",
+	"Ловушки (X) сбивают с курса ракеты с тепловой головкой самонаведения — но не радиокомандные ЗУР.",
 	"ЗРК захватывает цель, пока она удерживается в прицеле, — затем пуск.",
-	"Эсминцы — главные цели: торпеды, крылатые ракеты и бомбы наносят им повышенный урон.",
+	"Флагманы — главные цели: торпеды, крылатые ракеты и бомбы наносят им повышенный урон.",
+	"Корабли медленно разгоняются и поворачивают: главный калибр бьёт по навесной траектории.",
 	"Поршневые истребители маневреннее реактивных на малой скорости — затягивайте их в вираж.",
 	"Облака скрывают самолёт от глаз, но не от радара.",
 ]
@@ -326,11 +326,14 @@ func _build_spawn_points() -> void:
 	for team in 2:
 		for cat: int in GameDB.CATEGORY_ORDER:
 			spawn_points["%d:%d" % [team, cat]] = layout.spawn_transforms(terrain, team, cat)
+		spawn_points["%d:ship" % team] = layout.ship_spawn_transforms(team)
 
 
-## Свободная точка спавна своей базы для категории техники (аэродром / берег / причал).
-func pick_spawn_transform(team: int, category: int) -> Transform3D:
-	var list: Array = spawn_points.get("%d:%d" % [team, category], [])
+## Свободная точка спавна своей базы для категории техники (аэродром / берег / причал; крупные
+## корабли — на рейде дальше от причала).
+func pick_spawn_transform(team: int, category: int, large_ship: bool = false) -> Transform3D:
+	var key := "%d:ship" % team if large_ship else "%d:%d" % [team, category]
+	var list: Array = spawn_points.get(key, [])
 	if list.is_empty():
 		return Transform3D(Basis(), Vector3(0.0, 600.0, 0.0))
 	var order := range(list.size())
@@ -352,8 +355,10 @@ func pick_spawn_transform(team: int, category: int) -> Transform3D:
 func _spawn_warships() -> void:
 	for team in 2:
 		var w := Warship.new()
+		w.vehicle_type = GameDB.flagship_for(team, GlobalBattleManager.air_era)
+		w.autonomous = true
 		w.team = team
-		w.pilot_name = "Эсминец %s" % WARSHIP_NAMES[team]
+		w.pilot_name = "Флагман"
 		var anchor := layout.warship_anchor(team)
 		w.anchor = anchor
 		w.patrol_radius = MapLayout.WARSHIP_PATROL_RADIUS

@@ -18,6 +18,11 @@ var flare_resistance: float = 0.5
 var mesh_kind: String = "aam"
 var trail_kind: String = "small"
 var tail_offset: float = 1.5
+## Время от пуска до включения наведения (вертикальный старт: ракета сначала уходит вверх).
+var guidance_delay: float = 0.12
+## Сколько секунд после включения наведения цель не теряется из поля зрения ГСН (разворот после
+## вертикального старта).
+var fov_grace: float = 0.0
 
 var _trail: GPUParticles3D = null
 var _flame: MeshInstance3D = null
@@ -39,7 +44,7 @@ func _build_visual() -> void:
 	add_child(body)
 	_flame = MeshInstance3D.new()
 	_flame.name = "Flame"
-	_flame.mesh = MeshFactory.cylinder(0.05, 0.35 if mesh_kind == "sam" else 0.2, 2.2, 8)
+	_flame.mesh = MeshFactory.cylinder(0.05, 0.35 if mesh_kind.begins_with("sam") else 0.2, 2.2, 8)
 	_flame.material_override = MeshFactory.glow(Color(1.0, 0.7, 0.35), 6.0)
 	_flame.transform = MeshFactory.along_z(Vector3(0.0, 0.0, tail_offset + 1.0))
 	_flame.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -77,10 +82,10 @@ func _integrate(delta: float) -> void:
 	if _trail != null and not engine_on and _trail.emitting and age > burn_time + sustain_time + 1.5:
 		_trail.emitting = false
 	_validate_target()
-	if target != null and age > 0.12:
+	if target != null and age > guidance_delay:
 		var to_t := target.global_position - global_position
 		var dist := to_t.length()
-		if rad_to_deg(fwd.angle_to(to_t)) > seeker_fov_deg * 0.5:
+		if age > guidance_delay + fov_grace and rad_to_deg(fwd.angle_to(to_t)) > seeker_fov_deg * 0.5:
 			_lose_target()
 		elif dist > 0.5:
 			var los := to_t / dist

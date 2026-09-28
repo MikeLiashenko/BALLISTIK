@@ -1,10 +1,11 @@
 class_name SlotSelector
 extends VBoxContainer
 ## Панель выбора техники по слотам: вкладки категорий (Авиация / Наземная ПВО / Военный Флот) и сетка
-## карточек. Карточка (целиком кнопка) показывает название, роль и страну, счётчик занятых мест
+## карточек. Карточка (целиком кнопка) показывает название, класс и страну, счётчик занятых мест
 ## («[1/1]»), индикаторы слотов; если места заняты — карточка заблокирована (ботов своей команды игрок
 ## вытесняет).
-## Авиация разделена на истребители и ударные самолёты; набор зависит от эпохи авиации боя.
+## Техника сгруппирована по ролям с лимитом каждой роли в команде (истребители и ударные самолёты;
+## ЗСУ, ЗРК и зенитные орудия; катера и корабли); набор зависит от эпохи боя.
 ## Используется в лобби главного меню и на экране возрождения в бою.
 
 signal vehicle_chosen(type_id: String)
@@ -74,21 +75,21 @@ func _rebuild_cards() -> void:
 		child.queue_free()
 	_cards.clear()
 	var era := GlobalBattleManager.air_era
-	var groups: Array = []
-	if current_category == GameDB.Category.AIR:
-		groups.append(["ИСТРЕБИТЕЛИ", GameDB.types_with_role("fighter", era)])
-		groups.append(["УДАРНЫЕ САМОЛЁТЫ", GameDB.types_with_role("strike", era)])
-	else:
-		groups.append(["", GameDB.types_in_category(current_category, era)])
+	var roles: Array = []
+	match current_category:
+		GameDB.Category.AIR:
+			roles = ["fighter", "strike"]
+		GameDB.Category.GROUND:
+			roles = ["spaag", "sam", "flak"]
+		_:
+			roles = ["boat", "ship"]
 	var columns := 2 if not compact else 3
-	for g: Array in groups:
-		var types: Array = g[1]
+	for role: String in roles:
+		var types: Array = GameDB.types_with_role(role, era)
 		if types.is_empty():
 			continue
-		if str(g[0]) != "":
-			var role := "fighter" if str(g[0]) == "ИСТРЕБИТЕЛИ" else "strike"
-			var head := UITheme.section_title("%s · лимит в команде %d" % [str(g[0]), int(GameDB.ROLE_LIMITS[role])], 13)
-			_grid_box.add_child(head)
+		var head := UITheme.section_title("%s · лимит в команде %d" % [str(GameDB.ROLE_GROUPS[role]), int(GameDB.ROLE_LIMITS[role])], 13)
+		_grid_box.add_child(head)
 		var grid := GridContainer.new()
 		grid.columns = columns
 		grid.add_theme_constant_override("h_separation", 8)

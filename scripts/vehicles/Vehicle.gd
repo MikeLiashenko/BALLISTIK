@@ -233,6 +233,37 @@ func _update_damage_fx() -> void:
 		add_child(_damage_fx)
 
 
+## Выстрел снарядом по описанию gc (скорость, сопротивление, урон, неконтактный/дистанционный взрыватель,
+## фугасное действие, трассер, звук) из точки from в направлении dir с разбросом gc.spread.
+func fire_shell(gc: Dictionary, from: Vector3, dir: Vector3) -> Projectile:
+	var d := GameDB.spread_direction(dir, float(gc.get("spread", 0.3)), _rng)
+	var p := Projectile.new()
+	p.velocity = d * float(gc.get("speed", 900.0)) + velocity
+	p.drag = float(gc.get("drag", 0.0003))
+	p.damage = float(gc.get("damage", 0.0))
+	p.damage_type = str(gc.get("type", "shell"))
+	p.proximity_radius = float(gc.get("prox", 0.0))
+	p.proximity_damage = float(gc.get("prox_damage", 0.0))
+	p.blast_radius = float(gc.get("blast", 0.0))
+	p.blast_damage = float(gc.get("blast_damage", 0.0))
+	p.max_lifetime = float(gc.get("life", 3.0))
+	if gc.has("tracer"):
+		var tc: Variant = gc["tracer"]
+		if tc is Color:
+			p.tracer_color = tc
+			p.tracer_width = float(gc.get("tracer_w", 0.25))
+		else:
+			p.show_tracer = false
+	else:
+		p.tracer_color = Color(1.0, 0.85, 0.55)
+		p.tracer_width = clampf(p.blast_radius * 0.04, 0.2, 0.45)
+	p.setup(team, make_source(str(gc.get("name", "Пушка"))), self)
+	p.position = from
+	level.spawn_projectile(p)
+	SoundFX.play_3d(str(gc.get("sound", "cannon")), from, float(gc.get("volume", -3.0)), float(gc.get("pitch", 1.0)), 28.0 + p.blast_radius * 2.0)
+	return p
+
+
 ## Описание источника урона для очков и ленты событий.
 func make_source(weapon_name: String) -> Dictionary:
 	return {
@@ -321,6 +352,33 @@ func get_special_origin() -> Vector3:
 
 func special_ready() -> bool:
 	return false
+
+
+## Радиус поражения тактического удара (для метки на карте).
+func get_special_blast() -> float:
+	return 24.0
+
+
+## Траектория удара по метке для предпросмотра: {"points": PackedVector3Array, "eta": с}; пусто — недостижимо.
+func get_special_arc(origin: Vector3, point: Vector3) -> Dictionary:
+	var pts := PackedVector3Array()
+	var steps := 24
+	for i in steps + 1:
+		var k := float(i) / float(steps)
+		var p := origin.lerp(point, k)
+		p.y = lerpf(origin.y, point.y, k) + sin(k * PI) * 60.0
+		pts.append(p)
+	return {"points": pts, "eta": GameDB.flat_distance(origin, point) / 280.0}
+
+
+## Дальность индикатора РЛС в HUD.
+func get_radar_range() -> float:
+	return 8000.0 if category == GameDB.Category.AIR else 5000.0
+
+
+## Подписи кнопок сенсорного управления: {"fire", "secondary", "special"} ("" — кнопки нет).
+func weapon_labels() -> Dictionary:
+	return {"fire": "ОГОНЬ"}
 
 
 func camera_offset() -> Vector2:

@@ -256,6 +256,19 @@ func spawn_transforms(terrain: Terrain, team: int, category: int) -> Array[Trans
 	return result
 
 
+## Точки появления крупных кораблей: дальше от причала, в гарантированной акватории, курсом от берега.
+func ship_spawn_transforms(team: int) -> Array[Transform3D]:
+	var result: Array[Transform3D] = []
+	var root := pier_root[team]
+	var pd := pier_dir[team]
+	var lat := Vector2(-pd.y, pd.x)
+	var yaw := GameDB.yaw_of(Vector3(pd.x, 0.0, pd.y))
+	for o: Vector2 in [Vector2(-60.0, 430.0), Vector2(60.0, 470.0), Vector2(0.0, 520.0)]:
+		var p2 := root + lat * o.x + pd * o.y
+		result.append(Transform3D(Basis(Vector3.UP, yaw), Vector3(p2.x, 0.0, p2.y)))
+	return result
+
+
 ## Точки обороны для наземной ПВО ботов.
 func defense_points(team: int) -> Array[Vector2]:
 	var list: Array[Vector2] = [ad[team], hq[team] + (ad[team] - hq[team]).normalized() * 180.0, radar[team]]

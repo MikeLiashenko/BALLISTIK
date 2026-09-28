@@ -286,6 +286,532 @@ func add_box(center: Vector3, size: Vector3) -> void:
 		quad(a, e, d, b)
 
 
+# --- Треугольники с автоматическим порядком обхода --------------------------------------------------
+## Треугольник, лицевая сторона которого смотрит в сторону outward (в локальных координатах xform).
+func tri_out(a: int, b: int, c: int, outward: Vector3) -> void:
+	var n := (verts[b] - verts[a]).cross(verts[c] - verts[a])
+	if n.dot(xform.basis * outward) > 0.0:
+		tri(a, c, b)
+	else:
+		tri(a, b, c)
+
+
+## Плоский многоугольник (выпуклый или нет) с нормалью normal: точки в 3D, лежащие в одной плоскости.
+func add_polygon(points: PackedVector3Array, normal: Vector3, uv_scale: float = 1.0) -> void:
+	if points.size() < 3:
+		return
+	var n := normal.normalized()
+	var u_axis := n.cross(Vector3.UP if absf(n.y) < 0.9 else Vector3.RIGHT).normalized()
+	var v_axis := n.cross(u_axis)
+	var flat := PackedVector2Array()
+	for p in points:
+		flat.append(Vector2(p.dot(u_axis), p.dot(v_axis)))
+	var tris := Geometry2D.triangulate_polygon(flat)
+	if tris.is_empty():
+		return
+	var start := verts.size()
+	for i in points.size():
+		add_vertex(points[i], n, flat[i] * uv_scale)
+	for i in range(0, tris.size(), 3):
+		tri_out(start + tris[i], start + tris[i + 1], start + tris[i + 2], n)
+
+
+## Диск (круг) с нормалью normal.
+func add_disc(center: Vector3, normal: Vector3, radius: float, segs: int = 16) -> void:
+	var n := normal.normalized()
+	var u_axis := n.cross(Vector3.UP if absf(n.y) < 0.9 else Vector3.RIGHT).normalized()
+	var v_axis := n.cross(u_axis)
+	var ci := add_vertex(center, n)
+	var ring := PackedInt32Array()
+	for i in segs:
+		var a := float(i) / float(segs) * TAU
+		ring.append(add_vertex(center + (u_axis * cos(a) + v_axis * sin(a)) * radius, n))
+	for i in segs:
+		tri_out(ci, ring[i], ring[(i + 1) % segs], n)
+
+
+# --- Тела вращения ---------------------------------------------------------------------------------------
+## Тело вращения вокруг локальной оси +Y: profile — точки (y, r). Нормали по наклону образующей;
+## изломы круче smooth_deg остаются острыми (дульные тормоза, фланцы). Развёртка UV — в метрах.
+func add_lathe(profile: PackedVector2Array, segs: int = 16, cap_start: bool = false, cap_end: bool = false, smooth_deg: float = 50.0, phase: float = 0.0) -> void:
+	var n := profile.size()
+	if n < 2:
+		return
+	# Нормали сегментов образующей в плоскости (r, y).
+	var seg_n: Array[Vector2] = []
+	for i in n - 1:
+		var d := profile[i + 1] - profile[i]
+		var sn := Vector2(d.x, -d.y)  # (dy, -dr) → нормаль (r-составляющая, y-составляющая)
+		if sn.length_squared() < 1e-12:
+			sn = Vector2(1.0, 0.0)
+		seg_n.append(sn.normalized())
+	var cos_lim := cos(deg_to_rad(smooth_deg))
+	var arc := 0.0
+	for i in n - 1:
+		var p0 := profile[i]
+		var p1 := profile[i + 1]
+		var sn: Vector2 = seg_n[i]
+		var n0 := sn
+		var n1 := sn
+		if i > 0 and seg_n[i - 1].dot(sn) > cos_lim:
+			n0 = (seg_n[i - 1] + sn).normalized()
+		if i < n - 2 and seg_n[i + 1].dot(sn) > cos_lim:
+			n1 = (seg_n[i + 1] + sn).normalized()
+		var seg_len := p0.distance_to(p1)
+		var start := verts.size()
+		for s in segs + 1:
+			var a := phase + float(s) / float(segs) * TAU
+			var ca := cos(a)
+			var sa := sin(a)
+			add_vertex(Vector3(ca * p0.y, p0.x, sa * p0.y), Vector3(ca * n0.x, n0.y, sa * n0.x), Vector2(a * maxf(p0.y, 0.01), arc))
+			add_vertex(Vector3(ca * p1.y, p1.x, sa * p1.y), Vector3(ca * n1.x, n1.y, sa * n1.x), Vector2(a * maxf(p1.y, 0.01), arc + seg_len))
+		arc += seg_len
+		for s in segs:
+			var a0 := start + s * 2
+			var a1 := a0 + 1
+			var b0 := a0 + 2
+			var b1 := a0 + 3
+			var am := phase + (float(s) + 0.5) / float(segs) * TAU
+			var outward := Vector3(cos(am) * sn.x, sn.y, sin(am) * sn.x)
+			if (profile[i + 1].y < 1e-5 and profile[i].y < 1e-5):
+				continue
+			tri_out(a0, a1, b1, outward)
+			tri_out(a0, b1, b0, outward)
+	if cap_start and profile[0].y > 1e-4:
+		_lathe_cap(profile[0], segs, phase, -1.0 if profile[1].x > profile[0].x else 1.0)
+	if cap_end and profile[n - 1].y > 1e-4:
+		_lathe_cap(profile[n - 1], segs, phase, 1.0 if profile[n - 1].x > profile[n - 2].x else -1.0)
+
+
+func _lathe_cap(p: Vector2, segs: int, phase: float, dir: float) -> void:
+	var nv := Vector3(0.0, dir, 0.0)
+	var ci := add_vertex(Vector3(0.0, p.x, 0.0), nv)
+	var ring := PackedInt32Array()
+	for s in segs:
+		var a := phase + float(s) / float(segs) * TAU
+		ring.append(add_vertex(Vector3(cos(a) * p.y, p.x, sin(a) * p.y), nv))
+	for s in segs:
+		tri_out(ci, ring[s], ring[(s + 1) % segs], nv)
+
+
+# --- Лофт по сечениям произвольной формы ------------------------------------------------------------------
+## stations — массив [z, PackedVector2Array]: полупрофили сечений (x ≥ 0) от нижней точки на оси
+## симметрии вверх по правому борту до верхней точки на оси (mirror = true — левый борт зеркально);
+## при mirror = false — замкнутый контур целиком (против часовой стрелки, если смотреть с +Z).
+## Число точек во всех сечениях одинаковое. Нормали сглаживаются между гранями, угол между которыми
+## меньше smooth_deg, иначе ребро остаётся острым (броня, надстройки). Крышки торцов — триангуляцией.
+func add_sections(stations: Array, smooth_deg: float = 30.0, cap_front: bool = true, cap_back: bool = true, mirror: bool = true) -> void:
+	var nst := stations.size()
+	if nst < 2:
+		return
+	var rings: Array[PackedVector3Array] = []
+	for st: Array in stations:
+		var z := float(st[0])
+		var pts: PackedVector2Array = st[1]
+		var ring := PackedVector3Array()
+		for p in pts:
+			ring.append(Vector3(p.x, p.y, z))
+		if mirror:
+			for i in range(pts.size() - 2, 0, -1):
+				ring.append(Vector3(-pts[i].x, pts[i].y, z))
+		rings.append(ring)
+	var cols := rings[0].size()
+	for r in rings:
+		if r.size() != cols:
+			push_error("MeshKit.add_sections: разное число точек в сечениях")
+			return
+	# Ориентация: контур против часовой стрелки (вид с +Z) и рост z вдоль станций.
+	var area := 0.0
+	for i in nst:
+		var a := _ring_area(rings[i])
+		if absf(a) > absf(area):
+			area = a
+	var sign_k := 1.0 if area >= 0.0 else -1.0
+	if float(stations[nst - 1][0]) < float(stations[0][0]):
+		sign_k = -sign_k
+	# Нормали граней.
+	var fn: Array[Vector3] = []
+	fn.resize((nst - 1) * cols)
+	for r in nst - 1:
+		for c in cols:
+			var c1 := (c + 1) % cols
+			var a := rings[r][c]
+			var b := rings[r][c1]
+			var d := rings[r + 1][c]
+			var e := rings[r + 1][c1]
+			var nv := ((b - a) + (e - d)).cross((d - a) + (e - b)) * sign_k
+			fn[r * cols + c] = nv.normalized() if nv.length_squared() > 1e-14 else Vector3.ZERO
+	var cos_lim := cos(deg_to_rad(smooth_deg))
+	var arc_cache: Array[PackedFloat32Array] = []
+	for r in nst:
+		var arc := PackedFloat32Array()
+		arc.resize(cols + 1)
+		for c in range(1, cols + 1):
+			arc[c] = arc[c - 1] + rings[r][c % cols].distance_to(rings[r][c - 1])
+		arc_cache.append(arc)
+	for r in nst - 1:
+		for c in cols:
+			var f := fn[r * cols + c]
+			if f == Vector3.ZERO:
+				continue
+			var c1 := (c + 1) % cols
+			var corners := [[r, c], [r, c1], [r + 1, c1], [r + 1, c]]
+			var ids := PackedInt32Array()
+			for k in 4:
+				var rr: int = corners[k][0]
+				var cc: int = corners[k][1]
+				var nsum := Vector3.ZERO
+				# Грани, примыкающие к вершине (rr, cc): (rr-1|rr) × (cc-1|cc).
+				for dr: int in [rr - 1, rr]:
+					if dr < 0 or dr >= nst - 1:
+						continue
+					for dc: int in [(cc - 1 + cols) % cols, cc]:
+						var g := fn[dr * cols + dc]
+						if g != Vector3.ZERO and g.dot(f) >= cos_lim:
+							nsum += g
+				var nn := nsum.normalized() if nsum.length_squared() > 1e-12 else f
+				var arc_i := cols if (k == 1 or k == 2) and c1 == 0 else cc
+				ids.append(add_vertex(rings[rr][cc], nn, Vector2(rings[rr][cc].z, arc_cache[rr][arc_i])))
+			tri_out(ids[0], ids[3], ids[2], f)
+			tri_out(ids[0], ids[2], ids[1], f)
+	if cap_front:
+		_ring_cap(rings[0], Vector3(0.0, 0.0, -1.0 if float(stations[0][0]) <= float(stations[nst - 1][0]) else 1.0))
+	if cap_back:
+		_ring_cap(rings[nst - 1], Vector3(0.0, 0.0, 1.0 if float(stations[nst - 1][0]) >= float(stations[0][0]) else -1.0))
+
+
+static func _ring_area(ring: PackedVector3Array) -> float:
+	var a := 0.0
+	for i in ring.size():
+		var p := ring[i]
+		var q := ring[(i + 1) % ring.size()]
+		a += p.x * q.y - q.x * p.y
+	return a * 0.5
+
+
+func _ring_cap(ring: PackedVector3Array, normal: Vector3) -> void:
+	var flat := PackedVector2Array()
+	for p in ring:
+		flat.append(Vector2(p.x, p.y))
+	if absf(_ring_area(ring)) < 1e-6:
+		return
+	var tris := Geometry2D.triangulate_polygon(flat)
+	if tris.is_empty():
+		return
+	var start := verts.size()
+	for p in ring:
+		add_vertex(p, normal, Vector2(p.x, p.y))
+	for i in range(0, tris.size(), 3):
+		tri_out(start + tris[i], start + tris[i + 1], start + tris[i + 2], normal)
+
+
+# --- Призмы и блоки ---------------------------------------------------------------------------------------
+## Призма, выдавленная поперёк (вдоль X) из бокового профиля profile — замкнутый контур в плоскости
+## (z, y). Полуширина зависит от высоты: hw(y) = half_width - taper·(y - y_ref) — наклонные борта
+## (броня, башни, кабины). Боковины плоские; грани по контуру — с резкими рёбрами (smooth_deg).
+func add_prism(profile: PackedVector2Array, half_width: float, taper: float = 0.0, y_ref: float = 0.0, smooth_deg: float = 15.0, x_offset: float = 0.0) -> void:
+	var n := profile.size()
+	if n < 3:
+		return
+	var area := 0.0
+	for i in n:
+		var p := profile[i]
+		var q := profile[(i + 1) % n]
+		area += p.x * q.y - q.x * p.y
+	var orient := 1.0 if area > 0.0 else -1.0
+	var hw := PackedFloat32Array()
+	for p in profile:
+		hw.append(maxf(half_width - taper * (p.y - y_ref), 0.002))
+	# Боковины.
+	for side: float in [-1.0, 1.0]:
+		var pts := PackedVector3Array()
+		for i in n:
+			pts.append(Vector3(x_offset + side * hw[i], profile[i].y, profile[i].x))
+		var nrm := Vector3(side, taper, 0.0).normalized()
+		var flat := PackedVector2Array()
+		for p in profile:
+			flat.append(p)
+		var tris := Geometry2D.triangulate_polygon(flat)
+		var start := verts.size()
+		for i in n:
+			add_vertex(pts[i], nrm, Vector2(profile[i].x, profile[i].y))
+		for i in range(0, tris.size(), 3):
+			tri_out(start + tris[i], start + tris[i + 1], start + tris[i + 2], nrm)
+	# Грани по контуру.
+	var en: Array[Vector3] = []
+	for i in n:
+		var a := profile[i]
+		var b := profile[(i + 1) % n]
+		var d := b - a
+		# Внешняя нормаль в плоскости (z, y): для контура против часовой стрелки (z вправо, y вверх) — справа от ребра.
+		var out2 := Vector2(d.y, -d.x) * orient
+		en.append(Vector3(0.0, out2.y, out2.x).normalized() if out2.length_squared() > 1e-12 else Vector3.ZERO)
+	var cos_lim := cos(deg_to_rad(smooth_deg))
+	var arc := 0.0
+	for i in n:
+		var j := (i + 1) % n
+		var f := en[i]
+		if f == Vector3.ZERO:
+			continue
+		var ni := f
+		var nj := f
+		var prev := en[(i - 1 + n) % n]
+		var next := en[j]
+		if prev.dot(f) > cos_lim:
+			ni = (prev + f).normalized()
+		if next.dot(f) > cos_lim:
+			nj = (next + f).normalized()
+		var len_e := profile[i].distance_to(profile[j])
+		var a0 := add_vertex(Vector3(x_offset - hw[i], profile[i].y, profile[i].x), ni, Vector2(-hw[i], arc))
+		var a1 := add_vertex(Vector3(x_offset + hw[i], profile[i].y, profile[i].x), ni, Vector2(hw[i], arc))
+		var b0 := add_vertex(Vector3(x_offset - hw[j], profile[j].y, profile[j].x), nj, Vector2(-hw[j], arc + len_e))
+		var b1 := add_vertex(Vector3(x_offset + hw[j], profile[j].y, profile[j].x), nj, Vector2(hw[j], arc + len_e))
+		arc += len_e
+		tri_out(a0, a1, b1, f)
+		tri_out(a0, b1, b0, f)
+
+
+## Блок по плану: многоугольник plan (x, z) выдавлен вверх от y0 до y1, стены наклонены внутрь на inset
+## (верхний контур сжат). Надстройки кораблей, рубки, кабины. top/bottom — закрывать ли торцы.
+func add_block(plan: PackedVector2Array, y0: float, y1: float, inset: float = 0.0, top: bool = true, bottom: bool = false, smooth_deg: float = 12.0) -> void:
+	var n := plan.size()
+	if n < 3:
+		return
+	var upper := _inset_polygon(plan, inset)
+	var area := 0.0
+	for i in n:
+		var p := plan[i]
+		var q := plan[(i + 1) % n]
+		area += p.x * q.y - q.x * p.y
+	var orient := 1.0 if area > 0.0 else -1.0
+	var en: Array[Vector3] = []
+	for i in n:
+		var j := (i + 1) % n
+		var a := Vector3(plan[i].x, y0, plan[i].y)
+		var b := Vector3(plan[j].x, y0, plan[j].y)
+		var c := Vector3(upper[i].x, y1, upper[i].y)
+		var e := b - a
+		var up := c - a
+		var nv := e.cross(up)
+		# Внешняя нормаль: для обхода против часовой (x вправо, z вниз на плане) — знак по ориентации.
+		nv = nv * -orient
+		en.append(nv.normalized() if nv.length_squared() > 1e-12 else Vector3.ZERO)
+	var cos_lim := cos(deg_to_rad(smooth_deg))
+	for i in n:
+		var j := (i + 1) % n
+		var f := en[i]
+		if f == Vector3.ZERO:
+			continue
+		var ni := f
+		var nj := f
+		var prev := en[(i - 1 + n) % n]
+		if prev.dot(f) > cos_lim:
+			ni = (prev + f).normalized()
+		if en[j].dot(f) > cos_lim:
+			nj = (en[j] + f).normalized()
+		var a0 := add_vertex(Vector3(plan[i].x, y0, plan[i].y), ni)
+		var b0 := add_vertex(Vector3(plan[j].x, y0, plan[j].y), nj)
+		var a1 := add_vertex(Vector3(upper[i].x, y1, upper[i].y), ni)
+		var b1 := add_vertex(Vector3(upper[j].x, y1, upper[j].y), nj)
+		tri_out(a0, b0, b1, f)
+		tri_out(a0, b1, a1, f)
+	if top:
+		var pts := PackedVector3Array()
+		for p in upper:
+			pts.append(Vector3(p.x, y1, p.y))
+		add_polygon(pts, Vector3.UP)
+	if bottom:
+		var pts := PackedVector3Array()
+		for p in plan:
+			pts.append(Vector3(p.x, y0, p.y))
+		add_polygon(pts, Vector3.DOWN)
+
+
+static func _inset_polygon(plan: PackedVector2Array, inset: float) -> PackedVector2Array:
+	if absf(inset) < 1e-5:
+		return plan
+	var res := Geometry2D.offset_polygon(plan, -inset, Geometry2D.JOIN_MITER)
+	if res.size() == 1 and (res[0] as PackedVector2Array).size() == plan.size():
+		var poly: PackedVector2Array = res[0]
+		# Сопоставление вершин: offset_polygon может начинать контур с другой вершины.
+		var best := 0
+		var best_d := INF
+		for k in poly.size():
+			var d := poly[k].distance_squared_to(plan[0])
+			if d < best_d:
+				best_d = d
+				best = k
+		var out := PackedVector2Array()
+		var same_dir := (poly[(best + 1) % poly.size()] - plan[1]).length() < (poly[(best - 1 + poly.size()) % poly.size()] - plan[1]).length()
+		for k in poly.size():
+			out.append(poly[(best + k) % poly.size()] if same_dir else poly[(best - k + poly.size()) % poly.size()])
+		return out
+	# Запасной вариант — масштабирование к центру.
+	var c := Vector2.ZERO
+	for p in plan:
+		c += p
+	c /= float(plan.size())
+	var out2 := PackedVector2Array()
+	for p in plan:
+		var d := p - c
+		out2.append(c + d * maxf(1.0 - inset / maxf(d.length(), 0.01), 0.05))
+	return out2
+
+
+# --- Трубы, тросы, лееры ----------------------------------------------------------------------------------
+## Труба по ломаной: кольца ориентированы по касательной (параллельный перенос).
+func add_tube(points: PackedVector3Array, radius: float, segs: int = 6, cap: bool = false, radius_end: float = -1.0) -> void:
+	var n := points.size()
+	if n < 2:
+		return
+	var r_end := radius if radius_end < 0.0 else radius_end
+	var t0 := (points[1] - points[0]).normalized()
+	var ref := Vector3.UP if absf(t0.y) < 0.9 else Vector3.RIGHT
+	var u := t0.cross(ref).normalized()
+	var total := 0.0
+	for i in n - 1:
+		total += points[i].distance_to(points[i + 1])
+	var acc := 0.0
+	var prev_ring := PackedInt32Array()
+	var prev_t := t0
+	for i in n:
+		var t: Vector3
+		if i == 0:
+			t = t0
+		elif i == n - 1:
+			t = (points[i] - points[i - 1]).normalized()
+		else:
+			t = ((points[i] - points[i - 1]).normalized() + (points[i + 1] - points[i]).normalized()).normalized()
+		if i > 0:
+			acc += points[i].distance_to(points[i - 1])
+			# Параллельный перенос опорного вектора.
+			var axis := prev_t.cross(t)
+			if axis.length_squared() > 1e-10:
+				u = u.rotated(axis.normalized(), prev_t.angle_to(t))
+			u = (u - t * u.dot(t)).normalized()
+		prev_t = t
+		var v := t.cross(u)
+		var r := lerpf(radius, r_end, acc / maxf(total, 0.0001))
+		var ring := PackedInt32Array()
+		for s in segs:
+			var a := float(s) / float(segs) * TAU
+			var dir := u * cos(a) + v * sin(a)
+			ring.append(add_vertex(points[i] + dir * r, dir, Vector2(a * r, acc)))
+		if not prev_ring.is_empty():
+			for s in segs:
+				var s1 := (s + 1) % segs
+				var am := (float(s) + 0.5) / float(segs) * TAU
+				var outward := u * cos(am) + v * sin(am)
+				tri_out(prev_ring[s], ring[s], ring[s1], outward)
+				tri_out(prev_ring[s], ring[s1], prev_ring[s1], outward)
+		prev_ring = ring
+	if cap:
+		add_disc(points[0], -t0, radius, segs)
+		add_disc(points[n - 1], (points[n - 1] - points[n - 2]).normalized(), r_end, segs)
+
+
+## Поверхность-сетка: grid — массив строк PackedVector3Array одинаковой длины. Лицевая сторона смотрит
+## по (P[r][c+1] - P[r][c]) × (P[r+1][c] - P[r][c]) (или обратно при flip); double — с изнанкой.
+func add_patch(grid: Array, flip: bool = false, double: bool = false) -> void:
+	var rows := grid.size()
+	if rows < 2:
+		return
+	var cols := (grid[0] as PackedVector3Array).size()
+	var nrm: Array[PackedVector3Array] = []
+	for r in rows:
+		var row := PackedVector3Array()
+		var pr: PackedVector3Array = grid[r]
+		var pu: PackedVector3Array = grid[mini(r + 1, rows - 1)]
+		var pd: PackedVector3Array = grid[maxi(r - 1, 0)]
+		for c in cols:
+			var du := pr[mini(c + 1, cols - 1)] - pr[maxi(c - 1, 0)]
+			var dv := pu[c] - pd[c]
+			var nv := du.cross(dv)
+			if flip:
+				nv = -nv
+			row.append(nv.normalized() if nv.length_squared() > 1e-14 else Vector3.UP)
+		nrm.append(row)
+	for pass_i in (2 if double else 1):
+		var s := 1.0 if pass_i == 0 else -1.0
+		var start := verts.size()
+		for r in rows:
+			var pr: PackedVector3Array = grid[r]
+			for c in cols:
+				add_vertex(pr[c], nrm[r][c] * s, Vector2(float(c), float(r)))
+		for r in rows - 1:
+			for c in cols - 1:
+				var a := start + r * cols + c
+				var b := a + 1
+				var d := a + cols
+				var e := d + 1
+				var f := (nrm[r][c] + nrm[r + 1][c + 1] + nrm[r][c + 1] + nrm[r + 1][c]) * s
+				tri_out(a, b, e, f)
+				tri_out(a, e, d, f)
+
+
+## Лента гусеницы: path — замкнутый контур (z, y) внутренней поверхности (обход против часовой
+## стрелки, z вправо), от x0 до x1 по ширине, толщина thickness. UV.x — длина по ленте (для траков).
+func add_belt(path: PackedVector2Array, x0: float, x1: float, thickness: float) -> void:
+	var n := path.size()
+	if n < 3:
+		return
+	var area := 0.0
+	for i in n:
+		var p := path[i]
+		var q := path[(i + 1) % n]
+		area += p.x * q.y - q.x * p.y
+	var orient := 1.0 if area > 0.0 else -1.0
+	var outer := PackedVector2Array()
+	var nrm2 := PackedVector2Array()
+	for i in n:
+		var a := path[(i - 1 + n) % n]
+		var b := path[(i + 1) % n]
+		var d := (b - a).normalized()
+		var out2 := Vector2(d.y, -d.x) * orient
+		nrm2.append(out2)
+		outer.append(path[i] + out2 * thickness)
+	var lens := PackedFloat32Array()
+	lens.resize(n + 1)
+	for i in range(1, n + 1):
+		lens[i] = lens[i - 1] + path[i % n].distance_to(path[i - 1])
+	var w := x1 - x0
+	var part_uv2 := uv2
+	for i in n:
+		var j := (i + 1) % n
+		var u0 := lens[i]
+		var u1 := lens[i + 1]
+		var no_i := Vector3(0.0, nrm2[i].y, nrm2[i].x)
+		var no_j := Vector3(0.0, nrm2[j].y, nrm2[j].x)
+		uv2 = Vector2(1.0, uv2.y)
+		# Внешняя поверхность (грунтозацепы).
+		var a0 := add_vertex(Vector3(x0, outer[i].y, outer[i].x), no_i, Vector2(u0, 0.0))
+		var a1 := add_vertex(Vector3(x1, outer[i].y, outer[i].x), no_i, Vector2(u0, w))
+		var b0 := add_vertex(Vector3(x0, outer[j].y, outer[j].x), no_j, Vector2(u1, 0.0))
+		var b1 := add_vertex(Vector3(x1, outer[j].y, outer[j].x), no_j, Vector2(u1, w))
+		var fo := (no_i + no_j).normalized()
+		tri_out(a0, a1, b1, fo)
+		tri_out(a0, b1, b0, fo)
+		# Внутренняя поверхность (гребни).
+		uv2 = Vector2(0.0, uv2.y)
+		var c0 := add_vertex(Vector3(x0, path[i].y, path[i].x), -no_i, Vector2(u0, 0.0))
+		var c1 := add_vertex(Vector3(x1, path[i].y, path[i].x), -no_i, Vector2(u0, w))
+		var d0 := add_vertex(Vector3(x0, path[j].y, path[j].x), -no_j, Vector2(u1, 0.0))
+		var d1 := add_vertex(Vector3(x1, path[j].y, path[j].x), -no_j, Vector2(u1, w))
+		tri_out(c0, c1, d1, -fo)
+		tri_out(c0, d1, d0, -fo)
+		# Боковины.
+		for side: float in [-1.0, 1.0]:
+			var x := x0 if side < 0.0 else x1
+			var sn := Vector3(side, 0.0, 0.0)
+			var e0 := add_vertex(Vector3(x, path[i].y, path[i].x), sn, Vector2(u0, 0.0))
+			var e1 := add_vertex(Vector3(x, outer[i].y, outer[i].x), sn, Vector2(u0, thickness))
+			var e2 := add_vertex(Vector3(x, path[j].y, path[j].x), sn, Vector2(u1, 0.0))
+			var e3 := add_vertex(Vector3(x, outer[j].y, outer[j].x), sn, Vector2(u1, thickness))
+			tri_out(e0, e1, e3, sn)
+			tri_out(e0, e3, e2, sn)
+	uv2 = part_uv2
+
+
 static var _ico_cache: Dictionary = {}
 
 

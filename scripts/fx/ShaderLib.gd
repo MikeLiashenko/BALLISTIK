@@ -25,6 +25,10 @@ static func get_shader(key: String) -> Shader:
 			s.code = AIRCRAFT
 		"prop_disc":
 			s.code = PROP_DISC
+		"vehicle":
+			s.code = VEHICLE
+		"rubber":
+			s.code = RUBBER
 	_cache[key] = s
 	return s
 
@@ -531,5 +535,282 @@ void fragment() {
 	float tip = smoothstep(0.86, 0.9, r) * (1.0 - smoothstep(0.96, 1.0, r));
 	ALBEDO = mix(blade_color, tip_color, tip);
 	ALPHA = clamp(body + tip * 0.22, 0.0, 1.0);
+}
+"""
+
+
+## Окраска наземной техники и кораблей: камуфляж (пятна, «засада», сплинтер, полосы, «Мера»),
+## сварные швы и листы обшивки (трипланарно, в метрах), износ, пыль на нижних частях машин;
+## у кораблей — ватерлиния (необрастающая краска и чёрный пояс), палубы и потёки ржавчины.
+## Части (UV2.y): 0 — корпус, 1 — надстройка/башня, 2 — палуба, 3 — без рисунка, 4 — внутренность,
+## 5 — опознавательный цвет команды, 6 — сажа, 7 — белая краска. base_height — высота детали над
+## основанием модели (для пыли и ватерлинии у подвижных узлов).
+const VEHICLE := """
+shader_type spatial;
+render_mode diffuse_burley, specular_schlick_ggx;
+
+uniform vec3 camo_a : source_color = vec3(0.3, 0.34, 0.24);
+uniform vec3 camo_b : source_color = vec3(0.36, 0.3, 0.2);
+uniform vec3 camo_c : source_color = vec3(0.0);
+uniform vec3 id_color : source_color = vec3(0.2, 0.6, 1.0);
+uniform int pattern = 1;
+uniform float pattern_scale = 1.0;
+uniform float roughness_base = 0.72;
+uniform float metallic_base = 0.05;
+uniform float wear = 0.5;
+uniform float panel_scale = 1.0;
+uniform float panel_strength = 0.25;
+uniform float rivets = 0.0;
+uniform int mode = 0;
+uniform vec3 dust_color : source_color = vec3(0.47, 0.42, 0.33);
+uniform float dust_height = 1.1;
+uniform float dust_amount = 0.5;
+uniform float waterline = 0.0;
+uniform vec3 antifoul : source_color = vec3(0.42, 0.13, 0.1);
+uniform vec3 boot_top : source_color = vec3(0.07, 0.07, 0.08);
+uniform vec3 deck_color : source_color = vec3(0.3, 0.31, 0.33);
+uniform float rust = 0.25;
+uniform float measure_line = -1000.0;
+instance uniform float base_height = 0.0;
+
+varying vec3 mpos;
+varying vec3 mnrm;
+varying vec2 mpart;
+
+void vertex() {
+	mpos = VERTEX;
+	mnrm = NORMAL;
+	mpart = UV2;
+}
+
+float hash31(vec3 p) {
+	p = fract(p * 0.1031);
+	p += dot(p, p.zyx + 31.32);
+	return fract((p.x + p.y) * p.z);
+}
+
+float vnoise(vec3 p) {
+	vec3 i = floor(p);
+	vec3 f = fract(p);
+	f = f * f * (3.0 - 2.0 * f);
+	float n000 = hash31(i);
+	float n100 = hash31(i + vec3(1.0, 0.0, 0.0));
+	float n010 = hash31(i + vec3(0.0, 1.0, 0.0));
+	float n110 = hash31(i + vec3(1.0, 1.0, 0.0));
+	float n001 = hash31(i + vec3(0.0, 0.0, 1.0));
+	float n101 = hash31(i + vec3(1.0, 0.0, 1.0));
+	float n011 = hash31(i + vec3(0.0, 1.0, 1.0));
+	float n111 = hash31(i + vec3(1.0, 1.0, 1.0));
+	return mix(mix(mix(n000, n100, f.x), mix(n010, n110, f.x), f.y), mix(mix(n001, n101, f.x), mix(n011, n111, f.x), f.y), f.z);
+}
+
+float fbm(vec3 p) {
+	float v = 0.0;
+	float a = 0.5;
+	for (int i = 0; i < 4; i++) {
+		v += vnoise(p) * a;
+		p = p * 2.03 + vec3(1.7, 9.2, 3.1);
+		a *= 0.5;
+	}
+	return v;
+}
+
+float line_aa(float x, float period, float width) {
+	float d = abs(fract(x / period + 0.5) - 0.5) * period;
+	float fw = max(fwidth(x), 0.0005);
+	return 1.0 - smoothstep(width - fw, width + fw, d);
+}
+
+vec2 splinter(vec2 p) {
+	vec2 i = floor(p);
+	vec2 f = fract(p);
+	float best = 8.0;
+	float second = 8.0;
+	float id = 0.0;
+	for (int y = -1; y <= 1; y++) {
+		for (int x = -1; x <= 1; x++) {
+			vec2 g = vec2(float(x), float(y));
+			vec2 o = vec2(hash31(vec3(i + g, 1.0)), hash31(vec3(i + g, 7.0)));
+			vec2 r = g + o - f;
+			float d = max(abs(r.x * 0.8 + r.y * 0.6), abs(r.x * 0.6 - r.y * 0.8));
+			if (d < best) {
+				second = best;
+				best = d;
+				id = hash31(vec3(i + g, 3.0));
+			} else if (d < second) {
+				second = d;
+			}
+		}
+	}
+	return vec2(id, second - best);
+}
+
+void fragment() {
+	int part = int(mpart.y + 0.5);
+	vec3 vp = vec3(mpos.x, mpos.y + base_height, mpos.z);
+	vec3 sp = vp * pattern_scale;
+	vec3 base = camo_a;
+	bool has_c = length(camo_c) > 0.01;
+	if (pattern == 1 || pattern == 3) {
+		float n = fbm(sp * 0.35 + vec3(3.1, 0.0, 1.7));
+		base = mix(camo_a, camo_b, smoothstep(0.48, 0.515, n));
+		if (has_c) {
+			float n2 = fbm(sp * 0.42 + vec3(11.0, 5.0, 2.0));
+			base = mix(base, camo_c, smoothstep(0.575, 0.6, n2));
+		}
+		if (pattern == 3) {
+			vec3 cell = floor(sp * 2.6);
+			vec3 f = fract(sp * 2.6) - 0.5;
+			float dotm = (1.0 - smoothstep(0.1, 0.16, length(f))) * step(0.55, hash31(cell + 3.7));
+			base = mix(base, hash31(cell) > 0.5 ? camo_a : camo_b, dotm);
+		}
+	} else if (pattern == 2) {
+		vec2 s = splinter(sp.xz * 0.45 + vec2(sp.y * 0.3, -sp.y * 0.2));
+		base = s.x < 0.5 ? camo_a : camo_b;
+		if (has_c && s.x > 0.78) {
+			base = camo_c;
+		}
+	} else if (pattern == 4) {
+		float n = fbm(sp * 0.12 + vec3(2.0, 0.0, 9.0));
+		float band = sin(sp.z * 0.35 + sp.y * 0.6 + n * 4.0);
+		base = mix(camo_a, camo_b, smoothstep(-0.06, 0.06, band));
+		if (has_c) {
+			base = mix(base, camo_c, smoothstep(0.55, 0.6, fbm(sp * 0.2 + vec3(7.0))));
+		}
+	} else if (pattern == 5) {
+		base = vp.y < measure_line ? camo_b : camo_a;
+	} else if (pattern == 6) {
+		float n = fbm(sp * 0.5 + vec3(1.0, 2.0, 3.0));
+		float n2 = fbm(sp * 0.5 + vec3(8.0, 1.0, 4.0));
+		float l1 = 1.0 - smoothstep(0.02, 0.045, abs(n - 0.5));
+		float l2 = 1.0 - smoothstep(0.02, 0.045, abs(n2 - 0.5));
+		base = mix(camo_a, camo_b, l1);
+		base = mix(base, has_c ? camo_c : camo_b * 0.8, l2);
+	}
+	if (part == 3) {
+		base = camo_a;
+	} else if (part == 4) {
+		base *= 0.62;
+	} else if (part == 5) {
+		base = id_color;
+	}
+	float rough = roughness_base;
+	if (mode == 1 && part != 5 && part != 7 && part != 6) {
+		if (part == 2 || (part == 0 && mnrm.y > 0.86 && vp.y > waterline + 0.6)) {
+			base = deck_color * (0.9 + 0.2 * fbm(vp * 2.3));
+			rough = 0.9;
+		}
+		if (part == 0 || part == 1) {
+			float vert = 1.0 - abs(mnrm.y);
+			float streak = smoothstep(0.64, 0.8, fbm(vec3(vp.x * 2.2, vp.y * 0.16, vp.z * 2.2))) * vert;
+			base = mix(base, vec3(0.34, 0.21, 0.13), streak * rust * 0.55);
+		}
+		if (part == 0) {
+			if (vp.y < waterline - 0.18) {
+				base = antifoul * (0.9 + 0.15 * fbm(vp * 1.5));
+				rough = 0.85;
+			} else if (vp.y < waterline + 0.42) {
+				base = boot_top;
+			}
+		}
+	}
+	if (mode == 0 && part != 5 && part != 7) {
+		float nd = fbm(vp * 1.3);
+		float low = 1.0 - smoothstep(dust_height * 0.25, dust_height, vp.y + (nd - 0.5) * 0.7);
+		float top = smoothstep(0.7, 0.95, mnrm.y) * smoothstep(0.45, 0.75, fbm(vp * 0.9 + vec3(4.0))) * 0.5;
+		float dk = clamp((low + top) * dust_amount, 0.0, 0.85);
+		base = mix(base, dust_color * (0.85 + 0.3 * fbm(vp * 5.0)), dk);
+		rough = mix(rough, 0.95, dk);
+	}
+	vec3 an = abs(mnrm);
+	vec2 puv = (an.x >= an.y && an.x >= an.z) ? vp.zy : ((an.y >= an.z) ? vp.xz : vp.xy);
+	float lines = 0.0;
+	float riv = 0.0;
+	if (part <= 2) {
+		if (mode == 1) {
+			lines = max(line_aa(vp.y, 2.3 * panel_scale, 0.012) * step(an.y, 0.6), line_aa(puv.x, 6.0 * panel_scale, 0.012) * 0.6);
+		} else {
+			lines = max(line_aa(puv.x, 1.7 * panel_scale, 0.008), line_aa(puv.y, 1.1 * panel_scale, 0.007) * 0.6);
+		}
+		lines *= panel_strength;
+		if (rivets > 0.0) {
+			riv = line_aa(puv.x + 0.045, 1.7 * panel_scale, 0.012) * line_aa(puv.y, 0.09, 0.016) * rivets;
+		}
+	}
+	float dirt = fbm(vp * 2.1 + vec3(4.0));
+	vec3 col = base * (1.0 - wear * 0.22 * smoothstep(0.45, 0.8, dirt));
+	col *= 1.0 - wear * 0.1 * (fbm(vp * 6.0) - 0.4);
+	col *= 1.0 - lines * 0.35 - riv * 0.2;
+	if (part == 6) {
+		col = vec3(0.045, 0.043, 0.042) * (0.8 + 0.4 * dirt);
+		rough = 0.95;
+	} else if (part == 7) {
+		col = vec3(0.86, 0.86, 0.84) * (1.0 - wear * 0.1 * dirt);
+	}
+	ALBEDO = col;
+	ROUGHNESS = clamp(rough + (dirt - 0.5) * 0.12 + lines * 0.1, 0.05, 1.0);
+	METALLIC = metallic_base;
+	SPECULAR = 0.45;
+}
+"""
+
+
+## Гусеницы и шины: стальные траки с грунтозацепами и гребнями (kind = 0) или резиновый протектор
+## «ёлочкой» (kind = 1). UV.x — длина вдоль ленты/окружности, UV.y — поперёк, UV2.x = 1 — внешняя сторона.
+const RUBBER := """
+shader_type spatial;
+render_mode diffuse_burley, specular_schlick_ggx;
+
+uniform int kind = 0;
+uniform vec3 rubber : source_color = vec3(0.07, 0.068, 0.065);
+uniform vec3 steel : source_color = vec3(0.3, 0.29, 0.27);
+uniform float pitch = 0.17;
+uniform float width = 0.5;
+uniform vec3 dust_color : source_color = vec3(0.4, 0.36, 0.29);
+uniform float dust = 0.35;
+
+varying vec2 vuv;
+varying float outer;
+
+void vertex() {
+	vuv = UV;
+	outer = UV2.x;
+}
+
+float hash12(vec2 p) {
+	vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+	p3 += dot(p3, p3.yzx + 33.33);
+	return fract((p3.x + p3.y) * p3.z);
+}
+
+void fragment() {
+	vec3 col;
+	float rough;
+	float metal;
+	float across = clamp(vuv.y / max(width, 0.01), 0.0, 1.0);
+	float f = fract(vuv.x / pitch);
+	if (kind == 0) {
+		float gap = smoothstep(0.0, 0.07, f) * (1.0 - smoothstep(0.93, 1.0, f));
+		float grouser = (1.0 - smoothstep(0.07, 0.13, abs(f - 0.5))) * outer;
+		col = mix(steel * 0.3, steel * 0.72, gap);
+		col = mix(col, steel * 1.35, grouser * 0.85);
+		float guide = (1.0 - outer) * (1.0 - smoothstep(0.05, 0.09, abs(across - 0.5)));
+		col = mix(col, steel * 1.15, guide * 0.7);
+		rough = mix(0.82, 0.42, grouser);
+		metal = 0.65;
+	} else {
+		float shoulder = smoothstep(0.08, 0.2, across) * (1.0 - smoothstep(0.8, 0.92, across));
+		float chevron = fract((vuv.x + abs(across - 0.5) * width * 0.9) / pitch);
+		float block = step(0.42, chevron) * step(abs(across - 0.5), 0.44);
+		col = rubber * mix(1.0, mix(0.62, 1.2, block), shoulder);
+		rough = 0.92;
+		metal = 0.0;
+	}
+	float d = dust * (0.55 + 0.45 * hash12(floor(vuv * vec2(4.0, 6.0))));
+	col = mix(col, dust_color, d * 0.5);
+	ALBEDO = col;
+	ROUGHNESS = rough;
+	METALLIC = metal;
+	SPECULAR = 0.35;
 }
 """

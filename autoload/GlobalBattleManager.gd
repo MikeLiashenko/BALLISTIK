@@ -362,7 +362,7 @@ func spawn_participant(p: Participant) -> Vehicle:
 	v.participant_id = p.id
 	v.pilot_name = p.name
 	v.is_player = p.is_player
-	v.transform = level.pick_spawn_transform(p.team, GameDB.category_of(p.vehicle_type))
+	v.transform = level.pick_spawn_transform(p.team, GameDB.category_of(p.vehicle_type), GameDB.role_of(p.vehicle_type) == "ship")
 	var bot_driven := not p.is_player or (smoke_test and not smoke_human)
 	if bot_driven:
 		v.add_child(BotAI.new())
@@ -378,18 +378,19 @@ func spawn_participant(p: Participant) -> Vehicle:
 
 
 static func create_vehicle(type_id: String) -> Vehicle:
-	if GameDB.is_aircraft(type_id):
-		var a := Aircraft.new()
-		a.vehicle_type = type_id
-		return a
-	match type_id:
-		"spaag":
-			return AAGun.new()
-		"sam":
-			return SAMLauncher.new()
-		"boat":
-			return PatrolBoat.new()
-	return AAGun.new()
+	var v: Vehicle
+	match GameDB.category_of(type_id):
+		GameDB.Category.AIR:
+			v = Aircraft.new()
+		GameDB.Category.NAVAL:
+			if GameDB.role_of(type_id) == "boat":
+				v = Boat.new()
+			else:
+				v = Warship.new()
+		_:
+			v = AirDefense.new()
+	v.vehicle_type = type_id
+	return v
 
 
 func _process(delta: float) -> void:
@@ -453,8 +454,8 @@ func report_destroyed(v: Vehicle, killer: Dictionary) -> void:
 		var pos := v.global_position
 		var agl := pos.y - level.terrain.get_surface_height(pos.x, pos.z) if level != null else 0.0
 		print("[SMOKE] t=%.1f %s | pos=(%d,%d,%d) agl=%.0f weapon=%s" % [_smoke_elapsed, text, int(pos.x), int(pos.y), int(pos.z), agl, str(killer.get("weapon", "-"))])
-	if v.vehicle_type == "warship":
-		announcement.emit("ЭСМИНЕЦ %s ПОТОПЛЕН" % GameDB.team_name(v.team), GameDB.team_color(GameDB.enemy_team(v.team)))
+	if GameDB.is_flagship(v.vehicle_type):
+		announcement.emit("ФЛАГМАН %s ПОТОПЛЕН" % GameDB.team_name(v.team), GameDB.team_color(GameDB.enemy_team(v.team)))
 	unit_destroyed.emit(v, killer)
 	if v.is_player:
 		player_died.emit(killer)

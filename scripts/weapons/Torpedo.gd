@@ -61,7 +61,7 @@ func _find_target(pos: Vector3, dir: Vector3) -> Vehicle:
 		var to_t := GameDB.flat(v.global_position - pos)
 		if rad_to_deg(dir.angle_to(to_t)) > homing_cone_deg * 0.5:
 			continue
-		var d := to_t.length() * (0.6 if v.vehicle_type == "warship" else 1.0)
+		var d := to_t.length() * (0.6 if GameDB.is_major_ship(v.vehicle_type) else 1.0)
 		if d < best_d:
 			best_d = d
 			best = v

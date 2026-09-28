@@ -2,12 +2,14 @@ class_name GroundVehicle
 extends Vehicle
 ## Наземная техника: движение только по суше (вода, крутые склоны, здания и границы карты
 ## непроходимы), наклон корпуса по нормали рельефа, башня с наведением по азимуту и углу места
-## на точку прицеливания (VehicleControls.aim_point).
+## на точку прицеливания (VehicleControls.aim_point). Колёсные машины поворачивают только на ходу,
+## гусеничные — и на месте; стационарные позиции (max_forward_speed = 0) не двигаются.
 
 var max_forward_speed: float = 15.0
 var max_reverse_speed: float = 6.0
 var acceleration: float = 6.0
 var turn_rate: float = 1.0
+var wheeled: bool = false
 var turret_yaw_rate: float = 2.0
 var gun_pitch_rate: float = 1.5
 var gun_min_pitch: float = deg_to_rad(-6.0)
@@ -50,10 +52,16 @@ func _vehicle_physics(delta: float) -> void:
 	if terrain == null:
 		return
 	var c := controls
+	if max_forward_speed <= 0.0:
+		speed = 0.0
+		velocity = Vector3.ZERO
+		_update_turret(delta)
+		return
 	var target_speed := c.throttle * (max_forward_speed if c.throttle >= 0.0 else max_reverse_speed)
 	speed = move_toward(speed, target_speed, acceleration * delta)
 	var steer := c.steer if speed >= -0.5 else -c.steer
-	hull_yaw = wrapf(hull_yaw - steer * turn_rate * delta, -PI, PI)
+	var turn_eff := clampf(absf(speed) / 4.0, 0.15, 1.0) if wheeled else 1.0
+	hull_yaw = wrapf(hull_yaw - steer * turn_rate * turn_eff * delta, -PI, PI)
 	var heading := Vector3(-sin(hull_yaw), 0.0, -cos(hull_yaw))
 	var pos := global_position
 	var next := pos + heading * speed * delta

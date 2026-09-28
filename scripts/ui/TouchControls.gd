@@ -54,14 +54,15 @@ func configure(p_category: int, vehicle: Vehicle) -> void:
 				_add_button("special", "КАРТА", Vector2.ZERO, 42.0, "br", Vector2(115.0, 285.0))
 			_add_button("thr_up", "ГАЗ+", Vector2.ZERO, 36.0, "bl", Vector2(60.0, 360.0))
 			_add_button("thr_down", "ГАЗ−", Vector2.ZERO, 36.0, "bl", Vector2(60.0, 270.0))
-		GameDB.Category.NAVAL:
-			_add_button("fire", "ОГОНЬ", Vector2.ZERO, 62.0, "br", Vector2(125.0, 135.0))
-			_add_button("secondary", "ТОРПЕДА", Vector2.ZERO, 46.0, "br", Vector2(265.0, 100.0))
-			_add_button("special", "БАЛЛИСТ.", Vector2.ZERO, 44.0, "br", Vector2(115.0, 285.0))
-			_add_button("zoom", "ЗУМ", Vector2.ZERO, 36.0, "br", Vector2(250.0, 230.0))
 		_:
-			_add_button("fire", "ПУСК" if vehicle is SAMLauncher else "ОГОНЬ", Vector2.ZERO, 62.0, "br", Vector2(125.0, 135.0))
-			_add_button("zoom", "ЗУМ", Vector2.ZERO, 40.0, "br", Vector2(265.0, 100.0))
+			# Наземная ПВО и флот: подписи кнопок — по вооружению машины.
+			var labels: Dictionary = vehicle.weapon_labels() if vehicle != null else {"fire": "ОГОНЬ"}
+			_add_button("fire", str(labels.get("fire", "ОГОНЬ")), Vector2.ZERO, 62.0, "br", Vector2(125.0, 135.0))
+			if str(labels.get("secondary", "")) != "":
+				_add_button("secondary", str(labels["secondary"]), Vector2.ZERO, 46.0, "br", Vector2(265.0, 100.0))
+			if str(labels.get("special", "")) != "":
+				_add_button("special", str(labels["special"]), Vector2.ZERO, 44.0, "br", Vector2(115.0, 285.0))
+			_add_button("zoom", "ЗУМ", Vector2.ZERO, 36.0, "br", Vector2(250.0, 230.0))
 	queue_redraw()
 
 

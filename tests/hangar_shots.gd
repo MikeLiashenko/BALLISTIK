@@ -1,15 +1,24 @@
 extends SceneTree
-## Рендер моделей самолётов для визуальной проверки (запуск с окном — на скрытом рабочем столе):
-## godot --path . --script res://tests/hangar_shots.gd -- --out=DIR [--types=a,b] [--team=0]
+## Рендер моделей техники для визуальной проверки (запуск с окном — на скрытом рабочем столе):
+## godot --path . --script res://tests/hangar_shots.gd -- --out=DIR [--types=a,b] [--team=0] [--sheet]
+## По умолчанию — все самолёты. --sheet — четыре ракурса одной машины на одном листе (TYPE.png).
+
+const VIEWS := [Vector3(-0.8, 0.34, -0.95), Vector3(0.95, 0.5, 0.6), Vector3(-1.0, 0.06, 0.02), Vector3(0.55, 1.1, -0.7)]
 
 var out_dir := "user://hangar"
 var types: Array[String] = []
 var team := 0
+var sheet := false
 var index := -1
 var frames := 0
 var cam: Camera3D
 var holder: Node3D
+var ground: MeshInstance3D
 var view := 0
+var focus := Vector3.ZERO
+var extent := 10.0
+var images: Array[Image] = []
+
 
 func _initialize() -> void:
 	for arg in OS.get_cmdline_user_args():
@@ -20,6 +29,8 @@ func _initialize() -> void:
 				types.append(t)
 		elif arg.begins_with("--team="):
 			team = int(arg.get_slice("=", 1))
+		elif arg == "--sheet":
+			sheet = true
 	if types.is_empty():
 		for t: String in GameDB.VEHICLE_ORDER:
 			if GameDB.is_aircraft(t):
@@ -28,20 +39,21 @@ func _initialize() -> void:
 	var world := Node3D.new()
 	root.add_child(world)
 	Atmosphere.create(world, MapPresets.get_map("coast"), 2)
-	var ground := MeshInstance3D.new()
+	ground = MeshInstance3D.new()
 	var pm := PlaneMesh.new()
-	pm.size = Vector2(400, 400)
+	pm.size = Vector2(600, 600)
 	ground.mesh = pm
-	ground.position = Vector3(0, -6, 0)
 	ground.material_override = MeshFactory.mat(Color(0.3, 0.34, 0.26), 0.95)
 	world.add_child(ground)
 	holder = Node3D.new()
 	world.add_child(holder)
 	cam = Camera3D.new()
 	cam.fov = 40.0
+	cam.far = 4000.0
 	world.add_child(cam)
 	cam.make_current()
 	_next()
+
 
 func _next() -> void:
 	for c in holder.get_children():
@@ -49,6 +61,7 @@ func _next() -> void:
 	index += 1
 	view = 0
 	frames = 0
+	images.clear()
 	if index >= types.size():
 		quit()
 		return
@@ -60,35 +73,53 @@ func _next() -> void:
 		for d in parts["prop_discs"] + parts["afterburners"]:
 			(d as Node3D).visible = false
 	else:
-		match t:
-			"spaag":
-				model = VehicleModels.build_spaag(team)["root"]
-			"sam":
-				model = VehicleModels.build_sam(team)["root"]
-			"boat":
-				model = VehicleModels.build_boat(team)["root"]
-			_:
-				model = VehicleModels.build_destroyer(team)["root"]
+		var parts := VehicleModels.build(t, team)
+		if parts.is_empty():
+			push_error("Нет модели: " + t)
+			_next()
+			return
+		model = parts["root"]
 	holder.add_child(model)
+	var box := ModelAsm.model_aabb(model)
+	focus = box.get_center()
+	extent = maxf(box.size.x, maxf(box.size.y, box.size.z))
+	ground.position = Vector3(0.0, (box.position.y if not GameDB.is_aircraft(t) else -6.0) - 0.02, 0.0)
 	_place_camera()
 
+
 func _place_camera() -> void:
-	var t := types[index]
-	var L := float(AircraftSpecs.get_spec(t).get("length", 10.0)) if GameDB.is_aircraft(t) else float({"spaag": 8.0, "sam": 11.0, "boat": 12.0}.get(t, 90.0))
-	var dist := L * 1.55
-	var dirs := [Vector3(-0.75, 0.32, -0.9), Vector3(0.9, 0.55, 0.5), Vector3(0.0, 1.0, 0.02)]
-	var d: Vector3 = dirs[view].normalized()
-	cam.look_at_from_position(d * dist, Vector3.ZERO, Vector3.UP if view < 2 else Vector3.FORWARD)
+	var views_n := VIEWS.size() if sheet else 3
+	var d: Vector3 = VIEWS[view % views_n].normalized()
+	var dist := extent * (1.2 if sheet else 1.55)
+	cam.look_at_from_position(focus + d * dist, focus, Vector3.UP)
+
 
 func _process(_delta: float) -> bool:
 	frames += 1
 	if frames == 8:
 		var img := root.get_viewport().get_texture().get_image()
-		img.save_png(out_dir.path_join("%s_%d.png" % [types[index], view]))
+		if sheet:
+			images.append(img)
+		else:
+			img.save_png(out_dir.path_join("%s_%d.png" % [types[index], view]))
 		view += 1
 		frames = 0
-		if view >= 3:
+		if view >= (VIEWS.size() if sheet else 3):
+			if sheet:
+				_save_sheet()
 			_next()
 		else:
 			_place_camera()
 	return false
+
+
+func _save_sheet() -> void:
+	var w := images[0].get_width() / 2
+	var h := images[0].get_height() / 2
+	var out := Image.create(w * 2, h * 2, false, Image.FORMAT_RGBA8)
+	for i in images.size():
+		var img := images[i]
+		img.convert(Image.FORMAT_RGBA8)
+		img.resize(w, h, Image.INTERPOLATE_LANCZOS)
+		out.blit_rect(img, Rect2i(0, 0, w, h), Vector2i((i % 2) * w, (i / 2) * h))
+	out.save_png(out_dir.path_join("%s.png" % types[index]))

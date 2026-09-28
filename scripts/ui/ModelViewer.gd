@@ -11,6 +11,7 @@ var _vp: SubViewport = null
 var _camera: Camera3D = null
 var _holder: Node3D = null
 var _props: Array = []
+var _radars: Array = []
 var _yaw: float = 0.7
 var _pitch: float = -0.2
 var _dist: float = 14.0
@@ -88,6 +89,7 @@ func show_vehicle(type_id: String, team: int) -> void:
 	for c in _holder.get_children():
 		c.queue_free()
 	_props.clear()
+	_radars.clear()
 	var model: Node3D = null
 	if GameDB.is_aircraft(type_id):
 		var parts := AircraftBuilder.build(type_id, team)
@@ -98,17 +100,13 @@ func show_vehicle(type_id: String, team: int) -> void:
 		for f: Node3D in parts["afterburners"]:
 			f.visible = false
 	else:
-		match type_id:
-			"spaag":
-				model = VehicleModels.build_spaag(team)["root"]
-			"sam":
-				model = VehicleModels.build_sam(team)["root"]
-			"boat":
-				model = VehicleModels.build_boat(team)["root"]
+		var parts := VehicleModels.build(type_id, team)
+		model = parts.get("root")
+		_radars = parts.get("radars", [])
 	if model == null:
 		return
 	_holder.add_child(model)
-	var box := _aabb(model)
+	var box := ModelAsm.model_aabb(model)
 	var size := maxf(box.size.x, maxf(box.size.y, box.size.z))
 	_focus = box.get_center()
 	var floor_y := box.position.y - 0.05
@@ -117,24 +115,6 @@ func show_vehicle(type_id: String, team: int) -> void:
 	disc.scale = Vector3(size * 0.42, 1.0, size * 0.42)
 	_dist_target = size * 1.55
 	_dist = _dist_target * 1.3
-
-
-func _aabb(node: Node) -> AABB:
-	var result := AABB()
-	var first := true
-	for child in node.get_children():
-		if child is MeshInstance3D and (child as MeshInstance3D).mesh != null:
-			var mi := child as MeshInstance3D
-			var box := mi.transform * mi.get_aabb()
-			result = box if first else result.merge(box)
-			first = false
-		elif child is Node3D and not (child is Decal):
-			var sub := _aabb(child)
-			if sub.size != Vector3.ZERO:
-				sub = (child as Node3D).transform * sub
-				result = sub if first else result.merge(sub)
-				first = false
-	return result
 
 
 func _gui_input(event: InputEvent) -> void:
@@ -174,3 +154,7 @@ func _process(delta: float) -> void:
 	for hub: Node3D in _props:
 		if is_instance_valid(hub):
 			hub.rotate_object_local(Vector3.FORWARD, delta * 2.5)
+	for r: Dictionary in _radars:
+		var n: Node3D = r.get("node")
+		if n != null and is_instance_valid(n):
+			n.rotate_y(delta * float(r.get("speed", 1.5)) * 0.5)
