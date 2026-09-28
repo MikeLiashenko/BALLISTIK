@@ -159,9 +159,11 @@ func _build_main() -> void:
 	var settings := UITheme.menu_button("НАСТРОЙКИ")
 	settings.pressed.connect(_show_settings)
 	left.add_child(settings)
-	var quit := UITheme.menu_button("ВЫХОД")
-	quit.pressed.connect(func() -> void: get_tree().quit())
-	left.add_child(quit)
+	# На iOS SceneTree.quit() не работает: приложение закрывают жестом системы, кнопка не нужна.
+	if not OS.has_feature("ios"):
+		var quit := UITheme.menu_button("ВЫХОД")
+		quit.pressed.connect(func() -> void: get_tree().quit())
+		left.add_child(quit)
 	battle.grab_focus.call_deferred()
 	var music := HBoxContainer.new()
 	music.add_theme_constant_override("separation", 3)

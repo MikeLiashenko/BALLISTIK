@@ -49,7 +49,7 @@
   Salt» в бою, плавные переходы, приглушение на паузе, отдельные громкости музыки и эффектов.
 - **Меню**: кинематографичный 3D-фон (звено самолётов над случайной картой), лобби с превью карт,
   выбором эпохи и 3D-просмотром техники, **ангар** со всей техникой, экран загрузки с прогрессом.
-- **Кроссплатформенность**: Windows, Linux, Android (сенсорное управление), поддержка геймпада.
+- **Кроссплатформенность**: Windows, Linux, Android и iPhone (сенсорное управление), поддержка геймпада.
   Качество графики: Низкое / Среднее / Высокое / Ультра.
 
 Победа — по лимиту очков или по истечении времени (очки за технику, сооружения и эсминцы противника).
@@ -64,6 +64,45 @@ godot --path .
 ```
 
 При первом открытии редактор импортирует проект (создаст папку `.godot/`).
+
+## Запуск на iPhone
+
+Нужен iPhone XS / XR или новее (чип A12+) с iOS 15 и выше. Приложение для iPhone подписывается вашим
+Apple ID при установке — подойдёт и бесплатный. На телефоне игра работает как на Android: альбомная
+ориентация, сенсорное управление, качество графики «Низкое» по умолчанию; кнопки управления и панели боя
+не заходят под вырез камеры (Dynamic Island) и полосу «Домой».
+
+### Вариант 1: без Mac — готовый `.ipa` из GitHub Actions
+
+1. Скачайте `BALLISTIK-unsigned.ipa`: из релиза (для тегов `v*`) либо на вкладке **Actions** → **Build
+   BALLISTIK** → успешный запуск (или **Run workflow**) → артефакт **BALLISTIK-ios** (zip с `.ipa` внутри;
+   нужен вход в GitHub).
+2. Установите на компьютер с Windows или macOS [Sideloadly](https://sideloadly.io) (или AltStore). На Windows
+   ему нужен iTunes с сайта Apple (не из Microsoft Store).
+3. Подключите iPhone кабелем и подтвердите на телефоне «Доверять этому компьютеру». В Sideloadly выберите
+   `.ipa`, введите Apple ID и нажмите **Start**.
+4. На iPhone: **Настройки → Основные → VPN и управление устройством** → ваш Apple ID → «Доверять»; затем
+   **Настройки → Конфиденциальность и безопасность → Режим разработчика** → включить (телефон перезагрузится).
+
+С бесплатным Apple ID игра запускается 7 дней, потом её нужно установить заново тем же способом (одновременно
+не больше 3 таких приложений). С платным Apple Developer Program подпись действует год.
+
+### Вариант 2: Mac с Xcode
+
+1. Установите Xcode 26.1 или новее (App Store), Godot 4.7.2 и шаблоны экспорта
+   (**Editor → Manage Export Templates**).
+2. Экспортируйте проект Xcode: в редакторе **Project → Export → iOS → Export Project** (путь
+   `build/ios/BALLISTIK.ipa`) или `./tools/export.sh --targets ios`. Пресет iOS выгружает только проект
+   (**Export Project Only**): `build/ios/BALLISTIK.xcodeproj`.
+3. Откройте `build/ios/BALLISTIK.xcodeproj` → цель **BALLISTIK** → **Signing & Capabilities** → **Team**:
+   выберите свой Apple ID (Personal Team) или добавьте его через **Add an Account…**. Если Xcode сообщит,
+   что идентификатор `com.mikeliashenko.ballistik` недоступен, впишите свой Bundle Identifier.
+4. Подключите iPhone, выберите его в списке устройств вверху окна Xcode и нажмите **Run** (⌘R). Доверие
+   разработчику и режим разработчика на телефоне — как в шаге 4 варианта 1.
+
+App Store Team ID в пресете — заглушка `XXXXXXXXXX`, команду выбирают в Xcode. Чтобы Godot на Mac сам
+собирал `.ipa` (без **Export Project Only**) или запускал игру на iPhone кнопкой удалённого запуска,
+впишите в пресет свой Team ID.
 
 ## Управление
 
@@ -82,8 +121,8 @@ godot --path .
 
 **Геймпад**: левый стик — движение, правый — обзор, триггеры — оружие, A — карта, B — ловушки, Y — радар.
 
-**Android**: плавающий джойстик слева, обзор перетаскиванием по правой половине экрана, кнопки оружия, газа
-и ловушек; в тактическом режиме касание ставит метку, «ПУСК» — запуск.
+**Android и iPhone**: плавающий джойстик слева, обзор перетаскиванием по правой половине экрана, кнопки
+оружия, газа и ловушек; в тактическом режиме касание ставит метку, «ПУСК» — запуск.
 
 ## Архитектура
 
@@ -137,6 +176,7 @@ res://
 |---|---|
 | Windows `.exe`, Linux | Godot 4.7.2 + шаблоны экспорта 4.7.2 |
 | Android `.apk` | дополнительно OpenJDK 17 и Android SDK: `platform-tools`, `build-tools;35.0.1`, `platforms;android-35` |
+| iOS (проект Xcode) | шаблоны экспорта 4.7.2 на любой ОС; `.ipa` собирается только на macOS в Xcode 26.1+ (шаблоны собраны с iOS SDK 26.1) |
 
 Windows (PowerShell):
 
@@ -157,6 +197,7 @@ godot --headless --path . --import
 godot --headless --path . --export-release "Windows Desktop" build/windows/BALLISTIK.exe
 godot --headless --path . --export-release "Linux" build/linux/BALLISTIK.x86_64
 godot --headless --path . --export-debug "Android" build/android/BALLISTIK-debug.apk
+godot --headless --path . --export-release "iOS" build/ios/BALLISTIK.ipa   # проект Xcode в build/ios/
 ```
 
 Release-APK подписывается ключом из переменных `GODOT_ANDROID_KEYSTORE_RELEASE_PATH` / `_USER` / `_PASSWORD`.
@@ -165,7 +206,9 @@ Release-APK подписывается ключом из переменных `G
 
 `.github/workflows/build.yml` на каждый push в `main` и pull request: скачивает Godot 4.7.2 и шаблоны,
 компилирует все скрипты, прогоняет бои ботов на всех картах и тесты ручного управления, экспортирует
-Windows `.exe`, Linux и Android `.apk`. При пуше тега `v*` сборки публикуются в GitHub Release.
+Windows `.exe`, Linux, Android `.apk` и проект Xcode для iOS. На push в `main`, тегах и ручном запуске
+(**Run workflow**) задача `ios` на macOS собирает из него `.ipa` без подписи (артефакт **BALLISTIK-ios**) —
+его подписывает Sideloadly / AltStore при установке. При пуше тега `v*` сборки публикуются в GitHub Release.
 
 ## Автотесты
 

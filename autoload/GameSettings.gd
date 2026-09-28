@@ -72,6 +72,21 @@ func is_touch_enabled() -> bool:
 	return is_mobile()
 
 
+## Безопасная зона экрана в координатах холста размером canvas_size: без выреза камеры («чёлки»,
+## Dynamic Island) и полосы жеста «Домой». На iOS игра рисуется на весь экран, и кнопки у края
+## уходят под вырез; на остальных платформах возвращается весь холст.
+func safe_rect(canvas_size: Vector2) -> Rect2:
+	var full := Rect2(Vector2.ZERO, canvas_size)
+	if not OS.has_feature("ios"):
+		return full
+	var screen := Vector2(DisplayServer.screen_get_size())
+	var safe := Rect2(DisplayServer.get_display_safe_area())
+	if screen.x <= 0.0 or screen.y <= 0.0 or not safe.has_area():
+		return full
+	var k := canvas_size / screen
+	return Rect2(safe.position * k, safe.size * k).intersection(full)
+
+
 func load_settings() -> void:
 	var cfg := ConfigFile.new()
 	if cfg.load(SAVE_PATH) != OK:

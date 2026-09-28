@@ -326,21 +326,22 @@ func _process(delta: float) -> void:
 
 func _layout() -> void:
 	var s := _root.size
+	var safe := GameSettings.safe_rect(s)
 	_top_panel.position = Vector2((s.x - _top_panel.size.x) * 0.5, 10.0)
-	_feed_box.position = Vector2(s.x - _feed_box.size.x - 16.0, 14.0)
+	_feed_box.position = Vector2(safe.end.x - _feed_box.size.x - 16.0, 14.0)
 	_message_label.size = Vector2(s.x, 40.0)
 	_message_label.position = Vector2(0.0, s.y * 0.2)
 	_warning_label.size = Vector2(s.x, 40.0)
 	_warning_label.position = Vector2(0.0, s.y * 0.3)
 	var touch_on := touch_controls.visible
 	if touch_on:
-		_status_panel.position = Vector2(16.0, 100.0)
-		_radar_panel.position = Vector2(s.x - _radar_panel.size.x - 16.0, 70.0 + _feed_box.size.y)
+		_status_panel.position = Vector2(safe.position.x + 16.0, 100.0)
+		_radar_panel.position = Vector2(safe.end.x - _radar_panel.size.x - 16.0, 70.0 + _feed_box.size.y)
 	else:
-		_status_panel.position = Vector2(16.0, s.y - _status_panel.size.y - 16.0)
-		_radar_panel.position = Vector2(s.x - _radar_panel.size.x - 16.0, s.y - _radar_panel.size.y - 16.0)
-	_fps_label.position = Vector2(16.0, 12.0)
-	_help_hint.position = Vector2((s.x - _help_hint.size.x) * 0.5, s.y - 34.0)
+		_status_panel.position = Vector2(safe.position.x + 16.0, safe.end.y - _status_panel.size.y - 16.0)
+		_radar_panel.position = Vector2(safe.end.x - _radar_panel.size.x - 16.0, safe.end.y - _radar_panel.size.y - 16.0)
+	_fps_label.position = Vector2(safe.position.x + 16.0, 12.0)
+	_help_hint.position = Vector2((s.x - _help_hint.size.x) * 0.5, safe.end.y - 34.0)
 	for p: Control in [_respawn_panel, _pause_panel, _end_panel, _scoreboard, _help_panel, _settings_panel]:
 		p.position = ((s - p.size) * 0.5).max(Vector2.ZERO)
 

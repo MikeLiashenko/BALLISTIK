@@ -36,7 +36,7 @@ jobs:
           path: |
             ~/godot-bin
             ~/.local/share/godot/export_templates
-          key: godot-${{ env.GODOT_VERSION }}-${{ env.GODOT_RELEASE }}-v1
+          key: godot-${{ env.GODOT_VERSION }}-${{ env.GODOT_RELEASE }}-v2
 
       - name: Загрузка Godot и шаблонов экспорта
         if: steps.godot-cache.outputs.cache-hit != 'true'
@@ -56,6 +56,7 @@ jobs:
             "templates/windows_*_x86_64*" \
             "templates/linux_*.x86_64" \
             "templates/android_*.apk" \
+            "templates/ios.zip" \
             -d /tmp/tpl
           mv /tmp/tpl/templates/* "$tdir/"
           rm -rf /tmp/tpl /tmp/templates.tpz /tmp/godot.zip
@@ -127,6 +128,14 @@ jobs:
           test -f build/android/BALLISTIK-debug.apk
           ls -la build/*
 
+      # Вне macOS Godot создаёт только проект Xcode (.ipa из него собирает задача ios на macOS).
+      - name: Экспорт iOS (проект Xcode)
+        run: |
+          mkdir -p build/ios
+          ~/godot-bin/godot --headless --path . --export-release "iOS" build/ios/BALLISTIK.ipa
+          test -d build/ios/BALLISTIK.xcodeproj
+          test -f build/ios/BALLISTIK.pck
+
       - name: Артефакт — Windows
         uses: actions/upload-artifact@v7
         with:
@@ -145,10 +154,56 @@ jobs:
           name: BALLISTIK-android
           path: build/android
 
+      - name: Артефакт — проект Xcode (для задачи ios)
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-xcode-project
+          path: build/ios
+          retention-days: 1
+
+  ios:
+    name: iOS (.ipa без подписи)
+    if: github.event_name != 'pull_request'
+    needs: export
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - name: Проект Xcode
+        uses: actions/download-artifact@v8
+        with:
+          name: ios-xcode-project
+          path: xcode
+
+      # Без подписи: .ipa подписывается при установке на iPhone (Sideloadly / AltStore и Apple ID).
+      - name: Сборка (xcodebuild)
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          xcodebuild -project xcode/BALLISTIK.xcodeproj -scheme BALLISTIK -configuration Release \
+            -sdk iphoneos -destination "generic/platform=iOS" -derivedDataPath "$RUNNER_TEMP/dd" -quiet \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+
+      - name: Упаковка .ipa
+        run: |
+          set -euo pipefail
+          app="$RUNNER_TEMP/dd/Build/Products/Release-iphoneos/BALLISTIK.app"
+          test -f "$app/BALLISTIK.pck"
+          mkdir -p "$RUNNER_TEMP/ipa/Payload" build/ios
+          cp -R "$app" "$RUNNER_TEMP/ipa/Payload/"
+          (cd "$RUNNER_TEMP/ipa" && zip -qry "$GITHUB_WORKSPACE/build/ios/BALLISTIK-unsigned.ipa" Payload)
+          ls -la build/ios
+
+      - name: Артефакт — iOS
+        uses: actions/upload-artifact@v7
+        with:
+          name: BALLISTIK-ios
+          path: build/ios/BALLISTIK-unsigned.ipa
+
   release:
     name: Публикация релиза (теги v*)
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: export
+    needs: [export, ios]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -156,15 +211,18 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           path: dist
+          pattern: BALLISTIK-*
       - name: Архивы
         run: |
           cd dist
           zip -qr BALLISTIK-windows.zip BALLISTIK-windows
           zip -qr BALLISTIK-linux.zip BALLISTIK-linux
           cp BALLISTIK-android/BALLISTIK-debug.apk BALLISTIK-android-debug.apk
+          cp BALLISTIK-ios/BALLISTIK-unsigned.ipa BALLISTIK-ios-unsigned.ipa
       - uses: softprops/action-gh-release@v3
         with:
           files: |
             dist/BALLISTIK-windows.zip
             dist/BALLISTIK-linux.zip
             dist/BALLISTIK-android-debug.apk
+            dist/BALLISTIK-ios-unsigned.ipa

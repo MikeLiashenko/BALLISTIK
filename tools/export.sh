@@ -4,12 +4,14 @@
 #   ./tools/export.sh [--godot PATH] [--targets "linux windows android"] [--mode release|debug]
 #                     [--install-templates] [--skip-tests]
 #
-# Результат:  build/windows/BALLISTIK.exe, build/linux/BALLISTIK.x86_64, build/android/BALLISTIK.apk
+# Результат:  build/windows/BALLISTIK.exe, build/linux/BALLISTIK.x86_64, build/android/BALLISTIK.apk,
+#             build/ios/BALLISTIK.xcodeproj (только при явном --targets ios)
 #
 # Android: нужны OpenJDK 17 и Android SDK (platform-tools, build-tools 35.0.1, platforms;android-35).
 # Пути берутся из JAVA_HOME и ANDROID_HOME (или из настроек редактора Godot).
 # Release-APK подписывается ключом из GODOT_ANDROID_KEYSTORE_RELEASE_PATH / _USER / _PASSWORD,
 # debug-APK — отладочным ключом редактора или GODOT_ANDROID_KEYSTORE_DEBUG_PATH / _USER / _PASSWORD.
+# iOS: Godot создаёт проект Xcode, на iPhone его ставят из Xcode на macOS (README, «Запуск на iPhone»).
 set -euo pipefail
 
 GODOT_VERSION="4.7.2"
@@ -27,7 +29,7 @@ while [[ $# -gt 0 ]]; do
     --mode) MODE="$2"; shift 2 ;;
     --install-templates) INSTALL_TEMPLATES=1; shift ;;
     --skip-tests) SKIP_TESTS=1; shift ;;
-    -h|--help) sed -n '2,13p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,14p' "$0"; exit 0 ;;
     *) echo "Неизвестный параметр: $1" >&2; exit 2 ;;
   esac
 done
@@ -89,6 +91,7 @@ if [[ "$SKIP_TESTS" -ne 1 ]]; then
 fi
 
 for target in $TARGETS; do
+  RESULT=""
   case "$target" in
     windows) PRESET="Windows Desktop"; OUT="build/windows/BALLISTIK.exe" ;;
     linux) PRESET="Linux"; OUT="build/linux/BALLISTIK.x86_64" ;;
@@ -96,15 +99,18 @@ for target in $TARGETS; do
       PRESET="Android"; OUT="build/android/BALLISTIK.apk"
       [[ "$MODE" == "debug" ]] && OUT="build/android/BALLISTIK-debug.apk"
       ;;
-    *) echo "Неизвестная платформа: $target (windows, linux, android)" >&2; exit 2 ;;
+    # Пресет iOS экспортирует только проект Xcode (Export Project Only).
+    ios) PRESET="iOS"; OUT="build/ios/BALLISTIK.ipa"; RESULT="build/ios/BALLISTIK.xcodeproj" ;;
+    *) echo "Неизвестная платформа: $target (windows, linux, android, ios)" >&2; exit 2 ;;
   esac
+  RESULT="${RESULT:-$OUT}"
   mkdir -p "$(dirname "$OUT")"
-  rm -f "$OUT"
+  rm -rf "$RESULT"
   step "Экспорт: $PRESET ($MODE) -> $OUT"
   "$GODOT_BIN" --headless --path . "--export-$MODE" "$PRESET" "$OUT"
-  if [[ ! -f "$OUT" ]]; then
+  if [[ ! -e "$RESULT" ]]; then
     echo "Сборка '$PRESET' не удалась — смотрите вывод Godot выше." >&2
     exit 1
   fi
-  printf '\033[32mГотово: %s (%s)\033[0m\n' "$OUT" "$(du -h "$OUT" | cut -f1)"
+  printf '\033[32mГотово: %s (%s)\033[0m\n' "$RESULT" "$(du -sh "$RESULT" | cut -f1)"
 done

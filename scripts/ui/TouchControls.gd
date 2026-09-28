@@ -1,9 +1,10 @@
 class_name TouchControls
 extends Control
-## Сенсорное управление (Android): плавающий виртуальный джойстик слева (движение / рули),
+## Сенсорное управление (Android, iOS): плавающий виртуальный джойстик слева (движение / рули),
 ## зона обзора справа (перетаскивание вращает камеру), кнопки оружия, газа, ловушек и паузы.
 ## В тактическом режиме: касание — поставить метку удара, перетаскивание — двигать карту,
-## кнопки «ПУСК» и «ОТМЕНА». Поддерживается мультитач (индексы пальцев).
+## кнопки «ПУСК» и «ОТМЕНА». Поддерживается мультитач (индексы пальцев). Кнопки размещаются внутри
+## безопасной зоны экрана (GameSettings.safe_rect), чтобы не уходить под вырез камеры iPhone.
 
 signal pause_pressed
 
@@ -77,13 +78,14 @@ func _add_button(id: String, label: String, _unused: Vector2, radius: float, anc
 
 func _button_center(b: Dictionary) -> Vector2:
 	var o: Vector2 = b["offset"]
+	var safe := GameSettings.safe_rect(size)
 	match str(b["anchor"]):
 		"br":
-			return Vector2(size.x - o.x, size.y - o.y)
+			return safe.end - o
 		"bl":
-			return Vector2(o.x, size.y - o.y)
+			return Vector2(safe.position.x + o.x, safe.end.y - o.y)
 		_:
-			return o
+			return safe.position + o
 
 
 # --- Состояние для PlayerController -----------------------------------------------------------------------
@@ -201,7 +203,8 @@ func _on_button_pressed(id: String) -> void:
 func _draw() -> void:
 	var neon := Color(0.1, 0.9, 1.0)
 	if not tactical:
-		var base := _stick_origin if _stick_index >= 0 else Vector2(165.0, size.y - 165.0)
+		var safe := GameSettings.safe_rect(size)
+		var base := _stick_origin if _stick_index >= 0 else Vector2(safe.position.x + 165.0, safe.end.y - 165.0)
 		draw_circle(base, STICK_RADIUS, Color(0.02, 0.08, 0.12, 0.35))
 		draw_arc(base, STICK_RADIUS, 0.0, TAU, 48, Color(neon, 0.5), 2.0, true)
 		var knob := base + stick_vector() * STICK_RADIUS
