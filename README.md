@@ -78,7 +78,9 @@ Apple ID при установке — подойдёт и бесплатный.
    BALLISTIK** → успешный запуск (или **Run workflow**) → артефакт **BALLISTIK-ios** (zip с `.ipa` внутри;
    нужен вход в GitHub).
 2. Установите на компьютер с Windows или macOS [Sideloadly](https://sideloadly.io) (или AltStore). На Windows
-   ему нужен iTunes с сайта Apple (не из Microsoft Store).
+   ему нужны iTunes и iCloud с сайта Apple — [iTunes](https://www.apple.com/itunes/download/win64),
+   [iCloud](https://updates.cdn-apple.com/2020/windows/001-39935-20200911-1A70AA56-F448-11EA-8CC0-99D41950005E/iCloudSetup.exe);
+   версии из Microsoft Store сначала удалите и перезагрузите компьютер.
 3. Подключите iPhone кабелем и подтвердите на телефоне «Доверять этому компьютеру». В Sideloadly выберите
    `.ipa`, введите Apple ID и нажмите **Start**.
 4. На iPhone: **Настройки → Основные → VPN и управление устройством** → ваш Apple ID → «Доверять»; затем
@@ -86,6 +88,14 @@ Apple ID при установке — подойдёт и бесплатный.
 
 С бесплатным Apple ID игра запускается 7 дней, потом её нужно установить заново тем же способом (одновременно
 не больше 3 таких приложений). С платным Apple Developer Program подпись действует год.
+
+Если установка не идёт:
+- **«Guru Meditation … Invalid file»** — сбой входа в Apple ID, а не файла игры: в Sideloadly откройте
+  **Advanced options** и смените **Anisette** (Local ↔ Remote); не помогло — попробуйте другую сеть,
+  например раздачу интернета с телефона.
+- **«The provisioning profile is banned»** / «не удалось проверить целостность» — Apple заблокировала подпись
+  этого бесплатного Apple ID (чаще бывает с аккаунтами, которые давно используют для sideload); нужен другой
+  Apple ID.
 
 ### Вариант 2: Mac с Xcode
 
