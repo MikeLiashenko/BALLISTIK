@@ -38,6 +38,7 @@ var _salvo_left: int = 0
 var _salvo_timer: float = 0.0
 var _salvo_point: Vector3 = Vector3.ZERO
 var _length: float = 10.0
+var _radars: Array = []
 
 
 func _build() -> void:
@@ -57,9 +58,10 @@ func _build() -> void:
 	add_child(model)
 	_hull = parts.get("hull", model)
 	for m: Dictionary in parts.get("mounts", []):
-		_mounts.append({"yaw": m.get("yaw"), "pitch": m.get("pitch"), "muzzles": m.get("muzzles", []), "arc": m.get("arc", Vector2(-180.0, 180.0)), "weapon": str(m.get("weapon", "guns")), "cur_yaw": 0.0, "cur_pitch": 0.0, "ready": false, "barrel": 0})
+		_mounts.append({"yaw": m.get("yaw"), "pitch": m.get("pitch"), "muzzles": m.get("muzzles", []), "arc": m.get("arc", Vector2(-180.0, 180.0)), "weapon": str(m.get("weapon", "guns")), "cur_yaw": wrapf(float(m.get("rest", 0.0)), -PI, PI), "cur_pitch": 0.0, "ready": false, "barrel": 0})
 	_torpedo_tubes.assign(parts.get("torpedo_tubes", []))
 	_special_points.assign(parts.get("special_points", []))
+	_radars = parts.get("radars", [])
 	for wp: Node3D in parts.get("wake_points", []):
 		var w := Effects.create_wake()
 		wp.add_child(w)
@@ -144,6 +146,10 @@ func _vehicle_physics(delta: float) -> void:
 	_hull.position = Vector3(0.0, sin(_bob_time * 2.1) * 0.12 + rise * 0.28, 0.0)
 	for w in _wakes:
 		w.emitting = absf(speed) > 3.0
+	for r: Dictionary in _radars:
+		var n: Node3D = r["node"]
+		if is_instance_valid(n):
+			n.rotate_y(delta * float(r.get("speed", 2.0)))
 	_update_mounts(delta)
 
 
@@ -167,15 +173,16 @@ func _update_mounts(delta: float) -> void:
 			var local := parent.global_basis.inverse() * dir
 			var desired_yaw := atan2(-local.x, -local.z)
 			var arc: Vector2 = m["arc"]
-			var clamped := clampf(desired_yaw, deg_to_rad(arc.x), deg_to_rad(arc.y))
+			var in_arc := Warship._yaw_in_arc(desired_yaw, arc)
+			var target_yaw := desired_yaw if in_arc else Warship._nearest_arc_edge(desired_yaw, arc)
 			var desired_pitch := clampf(atan2(local.y, Vector2(local.x, local.z).length()), deg_to_rad(-10.0), deg_to_rad(float(gc.get("max_pitch", 70.0))))
 			var cy: float = m["cur_yaw"]
 			var cp: float = m["cur_pitch"]
-			cy = clampf(cy + clampf(wrapf(clamped - cy, -PI, PI), -3.0 * delta, 3.0 * delta), deg_to_rad(arc.x), deg_to_rad(arc.y))
+			cy = Warship._turn_within_arc(cy, target_yaw, 3.0 * delta, arc)
 			cp += clampf(desired_pitch - cp, -2.0 * delta, 2.0 * delta)
 			m["cur_yaw"] = cy
 			m["cur_pitch"] = cp
-			ready = absf(wrapf(desired_yaw - clamped, -PI, PI)) < 0.01 and absf(wrapf(desired_yaw - cy, -PI, PI)) < deg_to_rad(4.0) and absf(desired_pitch - cp) < deg_to_rad(4.0)
+			ready = in_arc and absf(wrapf(desired_yaw - cy, -PI, PI)) < deg_to_rad(4.0) and absf(desired_pitch - cp) < deg_to_rad(4.0)
 		yaw_node.rotation = Vector3(0.0, float(m["cur_yaw"]), 0.0)
 		if pitch_node != null and pitch_node != yaw_node:
 			pitch_node.rotation = Vector3(float(m["cur_pitch"]), 0.0, 0.0)
@@ -329,6 +336,8 @@ func _try_special(point: Vector3) -> void:
 			var cm := CruiseMissile.new()
 			cm.target_point = point
 			cm.direct = bool(special_cfg.get("direct", false))
+			cm.blast_radius = float(special_cfg.get("blast", cm.blast_radius))
+			cm.blast_damage = float(special_cfg.get("damage", cm.blast_damage))
 			var dir := -_special_points[(_next_special - 1) % _special_points.size()].global_basis.z if not _special_points.is_empty() else (get_forward() + Vector3.UP).normalized()
 			cm.velocity = dir * 60.0 + velocity
 			cm.position = from

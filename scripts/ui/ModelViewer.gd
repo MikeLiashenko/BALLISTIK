@@ -17,6 +17,10 @@ var _pitch: float = -0.2
 var _dist: float = 14.0
 var _dist_target: float = 14.0
 var _focus: Vector3 = Vector3.ZERO
+var _plan_r: float = 5.0
+var _height: float = 3.0
+var _zoom: float = 1.0
+var _key: DirectionalLight3D = null
 var _dragging: bool = false
 var _idle: float = 0.0
 
@@ -52,6 +56,7 @@ func _ready() -> void:
 	key.shadow_enabled = GameSettings.quality >= 1
 	key.directional_shadow_max_distance = 120.0
 	_vp.add_child(key)
+	_key = key
 	var fill := DirectionalLight3D.new()
 	fill.basis = GameDB.basis_from_forward(Vector3(-0.6, -0.2, 0.7))
 	fill.light_energy = 0.45
@@ -107,14 +112,49 @@ func show_vehicle(type_id: String, team: int) -> void:
 		return
 	_holder.add_child(model)
 	var box := ModelAsm.model_aabb(model)
-	var size := maxf(box.size.x, maxf(box.size.y, box.size.z))
 	_focus = box.get_center()
+	_height = box.size.y
+	_plan_r = maxf(_plan_radius(model, Transform3D.IDENTITY, _focus), 0.5)
+	_zoom = 1.0
 	var floor_y := box.position.y - 0.05
 	var disc := _vp.get_node("Turntable") as Node3D
 	disc.position = Vector3(_focus.x, floor_y, _focus.z)
-	disc.scale = Vector3(size * 0.42, 1.0, size * 0.42)
-	_dist_target = size * 1.55
+	disc.scale = Vector3(_plan_r * 0.84, 1.0, _plan_r * 0.84)
+	_dist_target = _fit_distance()
 	_dist = _dist_target * 1.3
+	_key.directional_shadow_max_distance = maxf(120.0, _dist_target * 1.6)
+
+
+## Радиус модели в плане (от оси поворотного стола) по вершинам мешей — не по углам габаритного
+## ящика, иначе самолёты с крестообразным силуэтом оказываются мельче, чем нужно.
+static func _plan_radius(node: Node, xf: Transform3D, center: Vector3) -> float:
+	var r := 0.0
+	for c in node.get_children():
+		if not (c is Node3D) or c is Decal:
+			continue
+		var cxf := xf * (c as Node3D).transform
+		var mi := c as MeshInstance3D
+		if mi != null and mi.mesh != null and mi.name != "Light":
+			for s in mi.mesh.get_surface_count():
+				var verts: PackedVector3Array = mi.mesh.surface_get_arrays(s)[Mesh.ARRAY_VERTEX]
+				var step := maxi(1, verts.size() / 6000)
+				for i in range(0, verts.size(), step):
+					var p := cxf * verts[i]
+					r = maxf(r, Vector2(p.x - center.x, p.z - center.z).length())
+		r = maxf(r, _plan_radius(c, cxf, center))
+	return r
+
+
+## Дистанция камеры, при которой модель целиком в кадре при любом развороте стола (с учётом
+## пропорций окна просмотра и перспективы ближнего края).
+func _fit_distance() -> float:
+	var vs := Vector2(_vp.size)
+	var tv := tan(deg_to_rad(_camera.fov * 0.5))
+	var th := maxf(tv * vs.x / maxf(vs.y, 1.0), 0.05)
+	var d_h := _plan_r * sqrt(1.0 / (th * th) + 1.0)
+	var hy := (_height * cos(_pitch) + _plan_r * 2.0 * absf(sin(_pitch))) * 0.5
+	var d_v := hy / tv + _plan_r * cos(_pitch)
+	return maxf(d_h, d_v) * 1.05
 
 
 func _gui_input(event: InputEvent) -> void:
@@ -123,9 +163,9 @@ func _gui_input(event: InputEvent) -> void:
 		if mb.button_index == MOUSE_BUTTON_LEFT:
 			_dragging = mb.pressed
 		elif mb.button_index == MOUSE_BUTTON_WHEEL_UP and mb.pressed:
-			_dist_target *= 0.9
+			_zoom = maxf(_zoom * 0.9, 0.35)
 		elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN and mb.pressed:
-			_dist_target *= 1.1
+			_zoom = minf(_zoom * 1.1, 2.5)
 		accept_event()
 	elif event is InputEventMouseMotion and _dragging:
 		var mm := event as InputEventMouseMotion
@@ -147,6 +187,7 @@ func _process(delta: float) -> void:
 	_idle += delta
 	if not _dragging and _idle > 1.5:
 		_yaw += delta * 0.25
+	_dist_target = _fit_distance() * _zoom
 	_dist = lerpf(_dist, _dist_target, clampf(delta * 4.0, 0.0, 1.0))
 	var dir := Vector3(sin(_yaw) * cos(_pitch), -sin(_pitch), cos(_yaw) * cos(_pitch))
 	_camera.position = _focus + dir * _dist

@@ -119,7 +119,8 @@ func _build() -> void:
 
 
 func _mount_entry(m: Dictionary) -> Dictionary:
-	return {"yaw": m.get("yaw"), "pitch": m.get("pitch"), "muzzles": m.get("muzzles", []), "arc": m.get("arc", Vector2(-180.0, 180.0)), "cur_yaw": 0.0, "cur_pitch": 0.0, "ready": false, "barrel": 0}
+	var rest := wrapf(float(m.get("rest", 0.0)), -PI, PI)
+	return {"yaw": m.get("yaw"), "pitch": m.get("pitch"), "muzzles": m.get("muzzles", []), "arc": m.get("arc", Vector2(-180.0, 180.0)), "cur_yaw": rest, "cur_pitch": 0.0, "ready": false, "barrel": 0}
 
 
 func _after_build() -> void:
@@ -622,6 +623,8 @@ func _launch_special(point: Vector3) -> void:
 	var cm := CruiseMissile.new()
 	cm.target_point = point
 	cm.direct = bool(spc.get("direct", false))
+	cm.blast_radius = float(spc.get("blast", cm.blast_radius))
+	cm.blast_damage = float(spc.get("damage", cm.blast_damage))
 	cm.velocity = dir * 70.0 + velocity
 	cm.position = from
 	cm.setup(team, make_source(str(spc.get("name", "ПКР"))), self)

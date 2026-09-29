@@ -271,7 +271,9 @@ func _build_lobby() -> void:
 	bottom.add_child(back)
 	_selected_label = UITheme.make_label("", 16, UITheme.TEXT)
 	_selected_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_selected_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_selected_label.clip_text = true
+	_selected_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	_selected_label.mouse_filter = Control.MOUSE_FILTER_PASS
 	bottom.add_child(_selected_label)
 	_start_button = UITheme.menu_button("НАЧАТЬ БОЙ", true, Vector2(280.0, 56.0))
 	_start_button.alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -391,10 +393,12 @@ func _build_lobby_right() -> Control:
 	_preview_desc = UITheme.make_label("", 13, UITheme.TEXT_DIM)
 	_preview_desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_preview_desc.custom_minimum_size = Vector2(270.0, 0.0)
+	_preview_desc.max_lines_visible = 3
 	box.add_child(_preview_desc)
 	_preview_weapons = UITheme.make_label("", 12, UITheme.TEXT)
 	_preview_weapons.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_preview_weapons.custom_minimum_size = Vector2(270.0, 0.0)
+	_preview_weapons.max_lines_visible = 2
 	box.add_child(_preview_weapons)
 	_preview_bars = _stat_bars(box)
 	box.add_child(UITheme.separator())
@@ -402,7 +406,7 @@ func _build_lobby_right() -> Control:
 	_roster.bbcode_enabled = true
 	_roster.scroll_active = true
 	_roster.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_roster.custom_minimum_size = Vector2(270.0, 90.0)
+	_roster.custom_minimum_size = Vector2(270.0, 64.0)
 	_roster.add_theme_font_size_override("normal_font_size", 13)
 	_roster.add_theme_font_size_override("bold_font_size", 14)
 	box.add_child(_roster)
@@ -691,6 +695,7 @@ func _refresh_lobby() -> void:
 	else:
 		var cat := GameDB.category_of(chosen)
 		_selected_label.text = "Карта: %s · %s — старт: %s" % [map_text, GameDB.vehicle_name(chosen, gbm.player_team), str(GameDB.CATEGORY_SPAWN[cat])]
+		_selected_label.tooltip_text = _selected_label.text
 		_on_vehicle_hovered(chosen)
 	_slot_selector.refresh()
 
@@ -854,9 +859,20 @@ func _run_menu_tour() -> void:
 		_refresh_lobby()
 	await get_tree().create_timer(1.5).timeout
 	GlobalBattleManager.save_screenshot()
+	# Места в лобби для наземной ПВО и корабля.
+	for t: String in ["tunguska", "burke"]:
+		if GlobalBattleManager.request_player_slot(t):
+			_slot_selector.show_category(GameDB.category_of(t))
+			_refresh_lobby()
+			await get_tree().create_timer(1.2).timeout
+			GlobalBattleManager.save_screenshot()
 	_show_hangar()
 	await get_tree().create_timer(1.8).timeout
 	GlobalBattleManager.save_screenshot()
+	for t: String in ["s300", "sboot", "kirov26"]:
+		_show_hangar_vehicle(t)
+		await get_tree().create_timer(1.5).timeout
+		GlobalBattleManager.save_screenshot()
 	_show_settings()
 	await get_tree().create_timer(0.8).timeout
 	GlobalBattleManager.save_screenshot()

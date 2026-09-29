@@ -70,6 +70,12 @@ func _on_tab_pressed(cat: int) -> void:
 	_rebuild_cards()
 
 
+## Открыть вкладку категории техники.
+func show_category(cat: int) -> void:
+	(_tab_buttons[cat] as Button).button_pressed = true
+	_on_tab_pressed(cat)
+
+
 func _rebuild_cards() -> void:
 	for child in _grid_box.get_children():
 		child.queue_free()

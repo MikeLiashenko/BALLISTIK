@@ -309,7 +309,7 @@ const VEHICLES := {
 		"stats": [0.3, 0.55, 0.62, 0.4],
 		"hp": 200.0, "hit_radius": 3.8, "armor": {"bullet": 0.5, "flak": 0.65, "missile": 0.85},
 		"move": {"speed": 10.5, "reverse": 4.0, "accel": 4.5, "turn": 0.9},
-		"turret": {"yaw": 1.6, "pitch": 1.4, "min": -10.0, "max": 90.0},
+		"turret": {"yaw": 1.6, "pitch": 1.4, "min": -2.0, "max": 90.0},
 		"radar": 0.0, "camera": Vector2(14.0, 4.6),
 		"guns": {"name": "4× 2-см Flak 38", "interval": 0.036, "magazine": 80, "reload": 5.5, "speed": 900.0, "drag": 0.0004, "damage": 5.5, "type": "flak", "prox": 2.5, "prox_damage": 6.0, "life": 2.4, "spread": 0.5, "tracer": Color(1.0, 0.55, 0.25), "tracer_w": 0.22, "sound": "cannon", "pitch": 1.35, "volume": -6.0, "flash": 0.9, "range": 1800.0},
 	},
@@ -426,7 +426,7 @@ const VEHICLES := {
 	},
 	"patriot": {
 		"category": Category.GROUND, "role": "sam", "era": "jet", "nation": "us", "class": "Зенитный ракетный комплекс",
-		"names": ["Patriot PAC-2", "Patriot PAC-2"], "max_slots": 1, "score": 35, "icon": "sam",
+		"names": ["Patriot PAC-2", "Patriot PAC-2"], "max_slots": 1, "score": 35, "icon": "sam_wheeled",
 		"weapons": "4× ЗУР MIM-104 · РЛС 7,5 км",
 		"desc": "Пусковая установка комплекса Patriot на колёсном шасси: четыре тяжёлые ЗУР в контейнерах, пуск под фиксированным углом.",
 		"stats": [0.4, 0.6, 0.9, 0.3],
@@ -588,7 +588,7 @@ const VEHICLES := {
 		"camera": Vector2(15.0, 4.8),
 		"guns": {"name": "Спарка 12,7-мм", "interval": 0.06, "magazine": 150, "reload": 4.0, "speed": 890.0, "drag": 0.00045, "damage": 4.5, "type": "bullet", "life": 2.0, "spread": 0.45, "tracer": Color(1.0, 0.45, 0.3), "tracer_w": 0.18, "sound": "mg", "pitch": 1.0, "volume": -5.0, "flash": 0.7, "range": 1200.0},
 		"guns2": {"name": "40-мм Mk 19", "interval": 0.18, "magazine": 32, "reload": 6.0, "speed": 240.0, "drag": 0.0, "damage": 0.0, "type": "shell", "blast": 5.0, "blast_damage": 32.0, "life": 9.0, "spread": 0.6, "tracer": Color(1.0, 0.85, 0.5), "tracer_w": 0.14, "sound": "cannon", "pitch": 1.6, "volume": -8.0, "flash": 0.6, "range": 1500.0, "lob": true},
-		"special": {"type": "cruise", "name": "ПТУР RBS 17", "count": 2, "interval": 1.5, "reload": 28.0, "min": 500.0, "max": 7000.0, "direct": true},
+		"special": {"type": "cruise", "name": "ПТУР RBS 17", "count": 2, "interval": 1.5, "reload": 28.0, "min": 500.0, "max": 7000.0, "direct": true, "blast": 10.0, "damage": 260.0},
 	},
 	"molniya": {
 		"category": Category.NAVAL, "role": "ship", "era": "jet", "nation": "su", "class": "Ракетный катер",

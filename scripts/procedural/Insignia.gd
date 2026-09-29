@@ -26,6 +26,53 @@ static func texture(nation: String, kind: String) -> Texture2D:
 	return tex
 
 
+## Сегменты цифр бортового номера (a — верх, b/c — правые, d — низ, e/f — левые, g — середина).
+const _DIGITS := {
+	"0": "abcdef", "1": "bc", "2": "abged", "3": "abgcd", "4": "fgbc", "5": "afgcd", "6": "afgedc",
+	"7": "abc", "8": "abcdefg", "9": "abcdfg", "D": "bcdef", "G": "afedcx", "C": "afed", " ": "",
+}
+
+
+## Бортовой номер корабля: блочные цифры (белые, у US Navy — с тёмной тенью). Текстура для декали
+## с соотношением сторон (0,62·N) : 1.
+static func hull_number(text: String, shadow: bool) -> Texture2D:
+	var key := "hull|%s|%s" % [text, str(shadow)]
+	if _cache.has(key):
+		return _cache[key]
+	var n := text.length()
+	var gw := 40.0
+	var w := gw * float(n) + 8.0
+	var h := w
+	var y0 := (h - 64.0) * 0.5
+	var body := ""
+	for layer in (2 if shadow else 1):
+		var off := 3.0 if (shadow and layer == 0) else 0.0
+		var col := "#1a1c20" if (shadow and layer == 0) else "#f2f2ee"
+		for i in n:
+			var segs: String = _DIGITS.get(text[i], "")
+			var x := 6.0 + float(i) * gw + off
+			var y := y0 + off
+			var t := 7.0
+			var gw2 := 30.0
+			var rects := {
+				"a": [x, y, gw2, t], "d": [x, y + 57.0, gw2, t], "g": [x, y + 28.5, gw2, t],
+				"b": [x + gw2 - t, y, t, 32.0], "c": [x + gw2 - t, y + 32.0, t, 32.0],
+				"f": [x, y, t, 32.0], "e": [x, y + 32.0, t, 32.0], "x": [x + 15.0, y + 28.5, gw2 - 15.0, t],
+			}
+			for sname in segs:
+				var r: Array = rects[sname]
+				body += "<rect x='%.1f' y='%.1f' width='%.1f' height='%.1f' fill='%s'/>" % [float(r[0]), float(r[1]), float(r[2]), float(r[3]), col]
+	var svg := "<svg xmlns='http://www.w3.org/2000/svg' width='%d' height='%d' viewBox='0 0 %d %d'>%s</svg>" % [int(w), int(h), int(w), int(h), body]
+	var img := Image.new()
+	if img.load_svg_from_string(svg, 4.0) != OK or img.is_empty():
+		_cache[key] = null
+		return null
+	img.generate_mipmaps()
+	var tex := ImageTexture.create_from_image(img)
+	_cache[key] = tex
+	return tex
+
+
 static func _star(r_out: float, r_in: float, cx: float = 32.0, cy: float = 32.0) -> String:
 	var pts := PackedStringArray()
 	for i in 10:
@@ -59,6 +106,8 @@ static func _svg(nation: String, kind: String) -> String:
 			return "<circle cx='32' cy='32' r='31' fill='#ffffff'/><circle cx='32' cy='32' r='27' fill='#c20f1f'/>"
 		"fr":
 			return "<circle cx='32' cy='32' r='30' fill='#1f3f94'/><circle cx='32' cy='32' r='20' fill='#ffffff'/><circle cx='32' cy='32' r='10' fill='#d0172b'/>"
+		"us_star":
+			return "<circle cx='32' cy='32' r='29' fill='none' stroke='#e8e8e2' stroke-width='3.5'/><polygon points='%s' fill='#e8e8e2'/>" % _star(26.0, 10.4)
 		"shark":
 			return "<path d='M2 30 Q20 14 62 22 Q40 34 62 44 Q22 50 2 34 Z' fill='#b3121b' stroke='#101010' stroke-width='2'/><path d='M8 30 L12 25 L16 29 L20 22 L24 27 L28 20 L32 25 L36 19 L40 24 L44 19 L48 23 L54 21 L58 24 Z' fill='#ffffff'/><path d='M8 34 L12 39 L16 35 L20 42 L24 37 L28 43 L32 38 L36 44 L40 39 L44 44 L48 40 L54 43 L58 41 Z' fill='#ffffff'/><circle cx='56' cy='16' r='4' fill='#ffffff' stroke='#101010' stroke-width='1.5'/><circle cx='56.5' cy='16' r='2' fill='#101010'/>"
 	return ""

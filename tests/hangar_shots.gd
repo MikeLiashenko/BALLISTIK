@@ -18,6 +18,9 @@ var view := 0
 var focus := Vector3.ZERO
 var extent := 10.0
 var images: Array[Image] = []
+## Множитель дистанции камеры (--dist=0.5 — вдвое ближе) и смещение точки обзора по длине (--focus=-20).
+var dist_k := 1.0
+var focus_z := 0.0
 
 
 func _initialize() -> void:
@@ -31,6 +34,10 @@ func _initialize() -> void:
 			team = int(arg.get_slice("=", 1))
 		elif arg == "--sheet":
 			sheet = true
+		elif arg.begins_with("--dist="):
+			dist_k = float(arg.get_slice("=", 1))
+		elif arg.begins_with("--focus="):
+			focus_z = float(arg.get_slice("=", 1))
 	if types.is_empty():
 		for t: String in GameDB.VEHICLE_ORDER:
 			if GameDB.is_aircraft(t):
@@ -81,7 +88,7 @@ func _next() -> void:
 		model = parts["root"]
 	holder.add_child(model)
 	var box := ModelAsm.model_aabb(model)
-	focus = box.get_center()
+	focus = box.get_center() + Vector3(0.0, 0.0, focus_z)
 	extent = maxf(box.size.x, maxf(box.size.y, box.size.z))
 	ground.position = Vector3(0.0, (box.position.y if not GameDB.is_aircraft(t) else -6.0) - 0.02, 0.0)
 	_place_camera()
@@ -90,7 +97,7 @@ func _next() -> void:
 func _place_camera() -> void:
 	var views_n := VIEWS.size() if sheet else 3
 	var d: Vector3 = VIEWS[view % views_n].normalized()
-	var dist := extent * (1.2 if sheet else 1.55)
+	var dist := extent * (1.2 if sheet else 1.55) * dist_k
 	cam.look_at_from_position(focus + d * dist, focus, Vector3.UP)
 
 

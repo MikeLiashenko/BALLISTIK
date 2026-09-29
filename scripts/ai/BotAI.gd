@@ -648,7 +648,7 @@ func _pick_special_target(v: Vehicle, r: Vector2, moving_ok: bool) -> Node3D:
 		var d := GameDB.flat_distance(pos, s.global_position)
 		if d < r.x + 60.0:
 			continue
-		var score := d * (0.8 if s.score_value >= 40 else 1.15)
+		var score := d * (1.0 if s.score_value >= 40 else 1.5)
 		if score < best_score:
 			best_score = score
 			best = s

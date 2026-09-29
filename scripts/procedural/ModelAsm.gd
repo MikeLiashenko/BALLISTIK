@@ -47,6 +47,12 @@ func mesh(parent: Node3D, part_name: String, build: Callable) -> MeshInstance3D:
 	mi.mesh = m
 	if team != 0 and m.has_meta("body_surface"):
 		mi.set_surface_override_material(int(m.get_meta("body_surface")), mat)
+	# Мелкие детали (установки, антенны) не рисуются дальше ~500 своих размеров — там они меньше пикселя;
+	# у кораблей это основная часть вызовов отрисовки.
+	var detail := m.get_aabb().get_longest_axis_size()
+	if detail < 6.0:
+		mi.visibility_range_end = maxf(detail * 500.0, 300.0)
+		mi.visibility_range_end_margin = detail * 40.0
 	parent.add_child(mi)
 	return mi
 
@@ -60,9 +66,36 @@ func glow(parent: Node3D, pos: Vector3, radius: float, color: Color, energy: flo
 	return l
 
 
+## Опознавательный знак — проекционная декаль на поверхность с нормалью normal (размер в метрах).
+func decal(parent: Node3D, tex: Texture2D, pos: Vector3, normal: Vector3, size: float, depth: float = 0.6) -> void:
+	if tex == null:
+		return
+	var y := normal.normalized()
+	var x := Vector3.UP.cross(y)
+	if x.length_squared() < 1e-4:
+		x = Vector3(1.0, 0.0, 0.0)
+	x = x.normalized()
+	var z := x.cross(y).normalized()
+	var d := Decal.new()
+	d.name = "Insignia"
+	d.texture_albedo = tex
+	d.size = Vector3(size, depth, size)
+	d.normal_fade = 0.35
+	d.upper_fade = 0.05
+	d.lower_fade = 0.05
+	d.albedo_mix = 1.0
+	d.distance_fade_enabled = true
+	d.distance_fade_begin = 500.0
+	d.distance_fade_length = 250.0
+	d.transform = Transform3D(Basis(x, y, z), pos)
+	parent.add_child(d)
+
+
 func finish() -> Dictionary:
 	_apply_heights(root, Transform3D.IDENTITY)
 	out["aabb"] = model_aabb(root)
+	if out.has("body_aabb"):
+		return out
 	# Габариты неподвижного корпуса (для формы столкновений): только меши прямо под корнем.
 	var body := AABB()
 	var first := true

@@ -481,6 +481,8 @@ func _launch_agm(c: Dictionary, point: Vector3, node: Node3D) -> void:
 	m.target_point = point
 	m.target_node = node
 	m.direct = bool(c.get("direct", false))
+	m.blast_radius = float(c.get("blast", m.blast_radius))
+	m.blast_damage = float(c.get("damage", m.blast_damage))
 	var mount := _mount_for("agm")
 	m.position = mount.global_position if mount != null else global_position + global_basis * Vector3(2.0, -1.0, 0.5)
 	m.velocity = velocity - global_basis.y * 6.0

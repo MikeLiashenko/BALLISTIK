@@ -573,7 +573,7 @@ func add_prism(profile: PackedVector2Array, half_width: float, taper: float = 0.
 
 ## Блок по плану: многоугольник plan (x, z) выдавлен вверх от y0 до y1, стены наклонены внутрь на inset
 ## (верхний контур сжат). Надстройки кораблей, рубки, кабины. top/bottom — закрывать ли торцы.
-func add_block(plan: PackedVector2Array, y0: float, y1: float, inset: float = 0.0, top: bool = true, bottom: bool = false, smooth_deg: float = 12.0) -> void:
+func add_block(plan: PackedVector2Array, y0: float, y1: float, inset: float = 0.0, top: bool = true, bottom: bool = false, smooth_deg: float = 12.0, inside: bool = false) -> void:
 	var n := plan.size()
 	if n < 3:
 		return
@@ -593,8 +593,9 @@ func add_block(plan: PackedVector2Array, y0: float, y1: float, inset: float = 0.
 		var e := b - a
 		var up := c - a
 		var nv := e.cross(up)
-		# Внешняя нормаль: для обхода против часовой (x вправо, z вниз на плане) — знак по ориентации.
-		nv = nv * -orient
+		# Внешняя нормаль: для обхода против часовой (x вправо, z вниз на плане) — знак по ориентации;
+		# inside — стенки смотрят внутрь (открытые рубки, внутренние поверхности башен).
+		nv = nv * -orient * (-1.0 if inside else 1.0)
 		en.append(nv.normalized() if nv.length_squared() > 1e-12 else Vector3.ZERO)
 	var cos_lim := cos(deg_to_rad(smooth_deg))
 	for i in n:

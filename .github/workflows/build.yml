@@ -109,6 +109,20 @@ jobs:
             exit 1
           fi
 
+      - name: Автотест — наземная ПВО и флот, ручное управление (headless)
+        run: |
+          set -o pipefail
+          for spec in tunguska:2 s300:2 avenger:2 flak88:1 fletcher:1 pt109:1 burke:2 cb90:2; do
+            v=${spec%%:*}
+            era=${spec##*:}
+            ~/godot-bin/godot --headless --path . -- --smoke-test --smoke-human --smoke-tactical --smoke-vehicle=$v --smoke-era=$era --smoke-seconds=15 --quality=0 2>&1 | tee unit-$v.log
+          done
+          if grep -q "SCRIPT ERROR" unit-*.log; then
+            echo "::error::Ошибки скриптов во время автотеста"
+            exit 1
+          fi
+          grep -h "stat spawned_" unit-*.log | sort | uniq -c
+
       - name: Экспорт Windows (.exe)
         run: |
           mkdir -p build/windows
