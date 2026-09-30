@@ -30,6 +30,9 @@ var player_team: int = 0
 var map_id: String = "random"
 var air_era: int = 0
 var force_touch_cmdline: bool = false
+## Позывной в сетевой игре и эпоха для онлайн-поиска боя.
+var player_name: String = ""
+var online_era: int = 0
 
 
 func _ready() -> void:
@@ -39,6 +42,7 @@ func _ready() -> void:
 	if OS.has_feature("mobile"):
 		quality = 0
 	load_settings()
+	_clamp_values()
 	for arg in OS.get_cmdline_user_args():
 		if arg == "--touch":
 			force_touch_cmdline = true
@@ -105,6 +109,8 @@ func load_settings() -> void:
 	team_size = int(cfg.get_value("match", "team_size", team_size))
 	score_limit = int(cfg.get_value("match", "score_limit", score_limit))
 	time_limit_min = int(cfg.get_value("match", "time_limit_min", time_limit_min))
+	player_name = str(cfg.get_value("net", "player_name", player_name))
+	online_era = int(cfg.get_value("net", "online_era", online_era))
 	player_team = int(cfg.get_value("match", "player_team", player_team))
 	map_id = str(cfg.get_value("match", "map_id", map_id))
 	air_era = int(cfg.get_value("match", "air_era", air_era))
@@ -128,6 +134,8 @@ func save_settings() -> void:
 	cfg.set_value("match", "team_size", team_size)
 	cfg.set_value("match", "score_limit", score_limit)
 	cfg.set_value("match", "time_limit_min", time_limit_min)
+	cfg.set_value("net", "player_name", player_name)
+	cfg.set_value("net", "online_era", online_era)
 	cfg.set_value("match", "player_team", player_team)
 	cfg.set_value("match", "map_id", map_id)
 	cfg.set_value("match", "air_era", air_era)
@@ -148,6 +156,10 @@ func _clamp_values() -> void:
 	team_size = clampi(team_size, 2, 16)
 	score_limit = clampi(score_limit, 200, 5000)
 	time_limit_min = clampi(time_limit_min, 3, 60)
+	online_era = clampi(online_era, 0, 2)
+	player_name = player_name.strip_edges().left(18)
+	if player_name == "":
+		player_name = "Пилот-%03d" % (randi() % 1000)
 	player_team = clampi(player_team, 0, 1)
 
 

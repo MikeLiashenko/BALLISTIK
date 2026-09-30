@@ -57,7 +57,7 @@ func _integrate(delta: float) -> void:
 func _find_target(pos: Vector3, dir: Vector3) -> Vehicle:
 	var best: Vehicle = null
 	var best_d := homing_range
-	for v in GlobalBattleManager.enemies_in_radius(team, pos, homing_range, GameDB.Category.NAVAL):
+	for v in GlobalBattleManager.enemies_in_radius(team, pos, homing_range, GameDB.Category.NAVAL, owner_pid()):
 		var to_t := GameDB.flat(v.global_position - pos)
 		if rad_to_deg(dir.angle_to(to_t)) > homing_cone_deg * 0.5:
 			continue
@@ -78,7 +78,7 @@ func _surface_hit(_from: Vector3, to: Vector3) -> Dictionary:
 
 
 func _explode(pos: Vector3) -> void:
-	Explosion.spawn(Vector3(pos.x, 0.4, pos.z), blast_radius, blast_damage, damage_type, team, source, structure_multiplier, true)
+	_blast(Vector3(pos.x, 0.4, pos.z), true)
 
 
 func _on_finish() -> void:

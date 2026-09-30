@@ -4,6 +4,8 @@ extends Node3D
 ## Попадание определяется лучом между положениями на соседних физических шагах — быстрые снаряды
 ## не «проскакивают» цели. Столкновение с рельефом и водой — по аналитической поверхности Terrain.
 ## Поддерживает трассер, неконтактный взрыватель и взрыв с зоной поражения (Explosion / Area3D).
+## Сетевая игра: снаряд, выпущенный на другом устройстве, — визуальная копия (net_visual) без урона;
+## ракеты, бомбы и торпеды (net_id != 0) взрываются у всех там, где взорвался оригинал.
 
 var velocity: Vector3 = Vector3.ZERO
 var gravity_scale: float = 1.0
@@ -25,8 +27,13 @@ var tracer_width: float = 0.22
 var age: float = 0.0
 var terrain: Terrain = null
 
+var net_id: int = 0
+var net_visual: bool = false
+
 var _exclude: Array[RID] = []
 var _dead: bool = false
+var _net_end_kind: int = 0
+var _net_frozen: bool = false
 
 
 func setup(p_team: int, p_source: Dictionary, p_shooter: Vehicle) -> void:
@@ -65,8 +72,21 @@ func _orient() -> void:
 		global_basis = GameDB.basis_from_forward(velocity)
 
 
+## id участника, выпустившего снаряд (-1 — нет).
+func owner_pid() -> int:
+	return int(source.get("attacker_id", -1))
+
+
+## Отслеживаемый по сети боеприпас (ракета, бомба, торпеда) — копии получают событие взрыва.
+func net_tracked() -> bool:
+	return get_script().get_global_name() != "Projectile"
+
+
 func _physics_process(delta: float) -> void:
 	if _dead:
+		return
+	if net_visual and net_id != 0:
+		_net_visual_step(delta)
 		return
 	age += delta
 	var from := global_position
@@ -122,7 +142,7 @@ func _ray_hit(from: Vector3, to: Vector3) -> Dictionary:
 		if hit.is_empty():
 			return {}
 		var collider: Object = hit["collider"]
-		if collider is Vehicle and (collider as Vehicle).team == team and team >= 0:
+		if collider is Vehicle and GlobalBattleManager.are_allies(team, owner_pid(), (collider as Vehicle).team, (collider as Vehicle).participant_id):
 			_exclude.append(hit["rid"])
 			query.exclude = _exclude
 			continue
@@ -162,7 +182,9 @@ func _proximity_target(from: Vector3, to: Vector3) -> Vehicle:
 	var best: Vehicle = null
 	var best_d := proximity_radius
 	for v in GlobalBattleManager.units:
-		if not is_instance_valid(v) or v.is_dead or v.team == team or v.category != GameDB.Category.AIR:
+		if not is_instance_valid(v) or v.is_dead or v.category != GameDB.Category.AIR or v == shooter:
+			continue
+		if v.team == team and not GlobalBattleManager.ffa or GlobalBattleManager.are_allies(team, owner_pid(), v.team, v.participant_id):
 			continue
 		var d := segment_distance(from, to, v.global_position) - v.hit_radius * 0.5
 		if d < best_d:
@@ -183,7 +205,7 @@ func _on_hit_object(collider: Object, pos: Vector3) -> void:
 	if blast_radius > 0.0:
 		_explode(pos)
 	else:
-		if collider != null and collider.has_method("apply_damage"):
+		if collider != null and collider.has_method("apply_damage") and not net_visual:
 			collider.call("apply_damage", damage, damage_type, source)
 		Effects.bullet_impact(pos, false, true)
 		if randf() < 0.35:
@@ -209,20 +231,36 @@ func _on_proximity(target: Vehicle, from: Vector3, to: Vector3) -> void:
 	if blast_radius > 0.0:
 		_explode(pos)
 	else:
-		target.apply_damage(proximity_damage, "flak", source)
+		if not net_visual:
+			target.apply_damage(proximity_damage, "flak", source)
 		Effects.flak_burst(pos)
 	_finish()
 
 
 func _explode(pos: Vector3) -> void:
 	var over_water := terrain != null and terrain.get_height(pos.x, pos.z) < 0.0 and pos.y < 4.0
+	_blast(pos, over_water)
+
+
+## Взрыв с зоной поражения; у визуальной копии (сетевая игра) — только эффект.
+func _blast(pos: Vector3, over_water: bool) -> void:
+	_net_end_kind = 1
+	if net_visual:
+		Effects.explosion(pos, blast_radius, over_water)
+		return
 	Explosion.spawn(pos, blast_radius, blast_damage, damage_type, team, source, structure_multiplier, over_water)
 
 
 ## Перехват средствами ПРО/ЗАК: ракета разрушается в воздухе без нанесения урона.
+## Копию чужой ракеты перехватывает её владелец (запрос по сети).
 func intercept() -> void:
 	if _dead:
 		return
+	if net_visual:
+		if net_id != 0:
+			Net.request_intercept(self)
+		return
+	_net_end_kind = 2
 	Effects.explosion(global_position, 6.0, false)
 	GlobalBattleManager.smoke_count("intercepted_" + str(get_script().get_global_name()))
 	_finish()
@@ -230,6 +268,8 @@ func intercept() -> void:
 
 ## Истечение времени жизни: зенитные снаряды самоликвидируются в воздухе, ракеты — подрыв.
 func _expire() -> void:
+	if net_visual and net_id != 0:
+		return
 	GlobalBattleManager.smoke_count("expired_" + str(get_script().get_global_name()))
 	if blast_radius > 0.0:
 		_explode(global_position)
@@ -241,11 +281,54 @@ func _expire() -> void:
 func _finish() -> void:
 	if _dead and not is_inside_tree():
 		return
+	var first := not _dead
 	_dead = true
+	if first and net_id != 0 and not net_visual:
+		Net.on_projectile_end(self, _net_end_kind)
 	_on_finish()
 	queue_free()
 
 
 ## Переопределяется наследниками (отцепить дымовой шлейф, снять регистрацию с цели).
 func _on_finish() -> void:
+	pass
+
+
+# --- Сетевая копия отслеживаемого боеприпаса -----------------------------------------------------------------
+## Копия летит по той же баллистике/наведению, но не сталкивается: у поверхности замирает (скрыта)
+## до события взрыва оригинала.
+func _net_visual_step(delta: float) -> void:
+	age += delta
+	if age > max_lifetime + 8.0:
+		_finish()
+		return
+	if _net_frozen:
+		return
+	var from := global_position
+	_integrate(delta)
+	if _dead:
+		return
+	if not _surface_hit(from, global_position).is_empty():
+		_net_frozen = true
+		visible = false
+		return
+	_orient()
+
+
+## Событие от владельца: боеприпас закончил полёт (kind: 0 — без взрыва, 1 — взрыв, 2 — перехват).
+func net_end(pos: Vector3, kind: int) -> void:
+	if _dead:
+		return
+	global_position = pos
+	visible = true
+	match kind:
+		1:
+			_explode(pos)
+		2:
+			Effects.explosion(pos, 6.0, false)
+	_finish()
+
+
+## Событие от владельца: ракета потеряла цель или ушла на ловушку.
+func net_lose_target() -> void:
 	pass

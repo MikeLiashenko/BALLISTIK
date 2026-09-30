@@ -5,7 +5,9 @@ extends Node
 ##  * участники матча (игрок и боты): выбор слотов в лобби и при возрождении;
 ##  * очки команд, время матча, условия победы, лента событий;
 ##  * спавн и возрождение техники на точках своей базы (аэродром / берег / причал);
-##  * реестр юнитов и сооружений на поле боя (для радара, ИИ и зон поражения).
+##  * реестр юнитов и сооружений на поле боя (для радара, ИИ и зон поражения);
+##  * режимы «командный бой» и «каждый сам за себя» (ffa): свой/чужой определяет are_allies();
+##  * сетевая игра (Net): на хосте — вся логика матча, на клиенте — зеркало состава, счёта и событий.
 
 signal slots_changed(team: int)
 signal roster_changed
@@ -26,6 +28,7 @@ const PLAYER_RESPAWN_DELAY := 5.0
 const BOT_RESPAWN_DELAY := 7.0
 const BATTLE_SCENE := "res://scenes/BattleLevel.tscn"
 const MENU_SCENE := "res://scenes/MainMenu.tscn"
+const FFA_KILL_COLOR := Color(1.0, 0.55, 0.42)
 
 var player_team: int = 0
 var team_size: int = 7
@@ -38,6 +41,9 @@ var map_choice: String = "coast"
 var map_id: String = "coast"
 ## Эпоха авиации: 0 — смешанная, 1 — поршневая, 2 — реактивная.
 var air_era: int = 0
+## «Каждый сам за себя»: все участники — враги друг другу; стороны (team) задают только базу появления,
+## окраску и лимиты слотов. Победа — по личным очкам.
+var ffa: bool = false
 
 var participants: Array[Participant] = []
 var player: Participant = null
@@ -46,6 +52,7 @@ var scores: Array[int] = [0, 0]
 var time_left: float = 0.0
 var match_running: bool = false
 var match_over: bool = false
+## Победитель: команда (0/1) или, в режиме ffa, id участника; -1 — ничья.
 var winner: int = -1
 var level: BattleLevel = null
 var units: Array[Vehicle] = []
@@ -98,9 +105,13 @@ func _parse_cmdline() -> void:
 			smoke_menu = true
 		elif arg.begins_with("--smoke-era="):
 			air_era = clampi(int(arg.get_slice("=", 1)), 0, 2)
+		elif arg == "--smoke-ffa":
+			ffa = true
 
 
 func configure_from_settings() -> void:
+	if Net.active():
+		return
 	player_team = GameSettings.player_team
 	difficulty = GameSettings.difficulty
 	score_limit = GameSettings.score_limit
@@ -113,6 +124,17 @@ func configure_from_settings() -> void:
 	team_size = clampi(GameSettings.team_size, 2, mini(GameDB.total_slots(air_era), 16))
 
 
+## Параметры сетевой сессии (хост задаёт их в лобби, клиент получает копию).
+func apply_session(s: Dictionary) -> void:
+	ffa = bool(s.get("ffa", false))
+	air_era = clampi(int(s.get("era", 0)), 0, 2)
+	difficulty = int(s.get("difficulty", 1))
+	score_limit = int(s.get("score_limit", 1000))
+	time_limit = float(s.get("time_min", 15)) * 60.0
+	map_choice = str(s.get("map", MapPresets.RANDOM_ID))
+	team_size = clampi(int(s.get("team_size", 7)), 2, mini(GameDB.total_slots(air_era), 16))
+
+
 ## Половина размера зоны боя текущей карты (м).
 func bounds() -> float:
 	if level != null and is_instance_valid(level) and level.layout != null:
@@ -120,8 +142,34 @@ func bounds() -> float:
 	return GameDB.MAP_HALF
 
 
+## Логика матча (урон, очки, спавн) выполняется здесь, а не на клиенте сетевой игры.
+func is_authority() -> bool:
+	return not Net.is_client()
+
+
+# --- Свой / чужой ----------------------------------------------------------------------------------------
+## Союзники ли стороны (team, id участника). В командном бою — одна команда; в режиме «каждый сам
+## за себя» — только сам участник. Нейтральные (team < 0) никому не союзники.
+func are_allies(team_a: int, pid_a: int, team_b: int, pid_b: int) -> bool:
+	if ffa:
+		return pid_a >= 0 and pid_a == pid_b
+	return team_a >= 0 and team_a == team_b
+
+
+func vehicles_allied(a: Vehicle, b: Vehicle) -> bool:
+	return are_allies(a.team, a.participant_id, b.team, b.participant_id)
+
+
+## Лимит очков победы: в командном бою — на команду, в режиме ffa — личный (около трети командного).
+func effective_score_limit() -> int:
+	if ffa:
+		return maxi(int(round(score_limit * 0.3 / 10.0)) * 10, 50)
+	return score_limit
+
+
 # --- Лобби и участники --------------------------------------------------------------------------------
-## Формирует составы команд: игрок + боты. Боты сразу занимают свободные слоты техники.
+## Формирует составы: игрок + боты (team_size на каждую сторону). Боты сразу занимают свободные слоты.
+## В режиме «каждый сам за себя» участники поровну делятся между двумя базами появления.
 func prepare_lobby() -> void:
 	configure_from_settings()
 	match_running = false
@@ -132,22 +180,35 @@ func prepare_lobby() -> void:
 	structures.clear()
 	_reset_slots()
 	_next_participant_id = 1
-	player = _add_participant("Вы", player_team, true)
+	player = _add_participant(GameSettings.player_name if Net.active() else "Вы", player_team, true)
+	player.peer_id = 1
 	if smoke_test and smoke_vehicle != "":
 		reserve_slot(player, GameDB.resolve_id(smoke_vehicle))
+	_fill_bots()
+	roster_changed.emit()
+
+
+## Добавляет ботов до размера команд.
+func _fill_bots() -> void:
 	var names: Array = GameDB.BOT_CALLSIGNS.duplicate()
 	names.shuffle()
+	var used := {}
+	for p in participants:
+		used[p.name] = true
 	var name_index := 0
 	for team in 2:
-		var bots := team_size - (1 if team == player_team else 0)
+		var bots := team_size - get_team_participants(team).size()
 		for i in bots:
 			var callsign := str(names[name_index % names.size()])
 			name_index += 1
+			while used.has(callsign) and name_index < names.size() * 2:
+				callsign = str(names[name_index % names.size()])
+				name_index += 1
+			used[callsign] = true
 			var p := _add_participant(callsign, team, false)
 			var t := BotAI.choose_vehicle_type(self, team, rng)
 			if t != "":
 				reserve_slot(p, t)
-	roster_changed.emit()
 
 
 func _add_participant(p_name: String, team: int, is_player: bool) -> Participant:
@@ -172,11 +233,198 @@ func get_team_participants(team: int) -> Array[Participant]:
 	return result
 
 
-## Смена стороны игроком в лобби (состав пересобирается).
+## Смена стороны игроком в лобби (офлайн состав пересобирается, в сети — обмен местом с ботом).
 func set_player_team(team: int) -> void:
 	GameSettings.player_team = clampi(team, 0, 1)
 	GameSettings.save_settings()
+	if Net.is_client():
+		Net.request_team(team)
+		return
+	if Net.is_host():
+		move_to_team(player, team)
+		return
 	prepare_lobby()
+
+
+## Перевод участника на другую сторону: бот с той стороны переходит на его место.
+func move_to_team(p: Participant, team: int) -> bool:
+	if p == null or p.team == team or p.has_live_vehicle() or team < 0 or team > 1:
+		return false
+	var swap: Participant = null
+	for q in get_team_participants(team):
+		if not q.is_human and not q.has_live_vehicle():
+			swap = q
+			break
+	if swap == null:
+		return false
+	release_slot(p)
+	release_slot(swap)
+	swap.team = p.team
+	p.team = team
+	if p.is_player:
+		player_team = team
+	var t := BotAI.choose_vehicle_type(self, swap.team, rng)
+	if t != "":
+		reserve_slot(swap, t)
+	roster_changed.emit()
+	slots_changed.emit(0)
+	slots_changed.emit(1)
+	return true
+
+
+# --- Люди в сетевой игре (хост) --------------------------------------------------------------------
+## Подключившийся игрок занимает место бота на стороне, где меньше людей. null — мест нет.
+func add_remote_human(peer_id: int, p_name: String) -> Participant:
+	var humans := [0, 0]
+	for p in participants:
+		if p.is_human:
+			humans[p.team] += 1
+	var order: Array = [0, 1] if humans[0] <= humans[1] else [1, 0]
+	if humans[0] == humans[1] and rng.randf() < 0.5:
+		order = [1, 0]
+	for team: int in order:
+		for q in get_team_participants(team):
+			if q.is_human:
+				continue
+			if q.has_live_vehicle():
+				q.vehicle.despawn()
+			release_slot(q)
+			participants.erase(q)
+			var p := _add_participant(p_name, team, false)
+			p.is_human = true
+			p.peer_id = peer_id
+			p.respawn_timer = 0.5
+			roster_changed.emit()
+			slots_changed.emit(team)
+			return p
+	return null
+
+
+## Игрок отключился: его место снова занимает бот, техника отзывается.
+func remove_remote_human(peer_id: int) -> void:
+	for p in participants:
+		if p.peer_id != peer_id or p.is_player:
+			continue
+		if p.has_live_vehicle():
+			p.vehicle.despawn()
+		p.is_human = false
+		p.peer_id = 0
+		p.net_ready = false
+		p.name += " [бот]"
+		p.alive = false
+		p.vehicle = null
+		p.respawn_timer = 2.0
+		release_slot(p)
+		var t := BotAI.choose_vehicle_type(self, p.team, rng)
+		if t != "":
+			reserve_slot(p, t)
+		roster_changed.emit()
+		return
+
+
+func participant_by_peer(peer_id: int) -> Participant:
+	for p in participants:
+		if p.is_human and p.peer_id == peer_id:
+			return p
+	return null
+
+
+func human_count() -> int:
+	var n := 0
+	for p in participants:
+		if p.is_human:
+			n += 1
+	return n
+
+
+# --- Зеркало состава на клиенте сетевой игры ---------------------------------------------------------------
+## Строки состава от хоста: [id, имя, сторона, человек, пир, тип техники, жив, уничт., потери, очки,
+## таймер возрождения, net_id техники]. Объекты участников сохраняются (ссылка на player не теряется).
+func net_apply_roster(rows: Array, my_pid: int) -> void:
+	var keep := {}
+	for row: Array in rows:
+		var id := int(row[0])
+		keep[id] = true
+		var p := get_participant(id)
+		if p == null:
+			p = Participant.new(id, str(row[1]), int(row[2]), false)
+			participants.append(p)
+		p.name = str(row[1])
+		p.team = int(row[2])
+		p.is_human = bool(row[3])
+		p.peer_id = int(row[4])
+		p.vehicle_type = str(row[5])
+		p.alive = bool(row[6])
+		p.kills = int(row[7])
+		p.deaths = int(row[8])
+		p.score = int(row[9])
+		p.respawn_timer = float(row[10])
+		var nv := Net.unit_by_id(int(row[11]))
+		if nv != null or not p.alive:
+			p.vehicle = nv
+		p.is_player = id == my_pid
+	for i in range(participants.size() - 1, -1, -1):
+		if not keep.has(participants[i].id):
+			participants.remove_at(i)
+	player = get_participant(my_pid)
+	if player != null:
+		player_team = player.team
+	_reset_slots()
+	for p in participants:
+		if p.vehicle_type != "" and slots[p.team].has(p.vehicle_type):
+			(slots[p.team][p.vehicle_type] as Array).append(p.id)
+	slots_changed.emit(0)
+	slots_changed.emit(1)
+	roster_changed.emit()
+
+
+func net_roster_rows() -> Array:
+	var rows: Array = []
+	for p in participants:
+		var nid := p.vehicle.net_id if p.has_live_vehicle() else 0
+		rows.append([p.id, p.name, p.team, p.is_human, p.peer_id, p.vehicle_type, p.alive, p.kills, p.deaths, p.score, snappedf(p.respawn_timer, 0.1), nid])
+	return rows
+
+
+func net_apply_scores(sc: Array, t_left: float) -> void:
+	var changed := sc.size() == 2 and (int(sc[0]) != scores[0] or int(sc[1]) != scores[1])
+	if sc.size() == 2:
+		scores = [int(sc[0]), int(sc[1])]
+	time_left = t_left
+	if changed:
+		score_changed.emit(0, scores[0])
+
+
+## Клиент: хост начал бой — параметры карты и переход на уровень.
+func net_begin_match(info: Dictionary) -> void:
+	map_id = str(info.get("map_id", "coast"))
+	map_seed = int(info.get("seed", 1))
+	air_era = int(info.get("era", 0))
+	ffa = bool(info.get("ffa", false))
+	score_limit = int(info.get("score_limit", 1000))
+	time_limit = float(info.get("time_limit", 900.0))
+	time_left = float(info.get("time_left", time_limit))
+	difficulty = int(info.get("difficulty", 1))
+	scores = [0, 0]
+	match_over = false
+	match_running = false
+	winner = -1
+	units.clear()
+	structures.clear()
+	get_tree().paused = false
+	get_tree().change_scene_to_file(BATTLE_SCENE)
+
+
+func net_match_info() -> Dictionary:
+	return {"map_id": map_id, "seed": map_seed, "era": air_era, "ffa": ffa, "score_limit": score_limit, "time_limit": time_limit, "time_left": time_left, "difficulty": difficulty}
+
+
+func net_finish(w: int) -> void:
+	if match_over:
+		return
+	match_over = true
+	winner = w
+	match_ended.emit(w)
 
 
 # --- Слоты ----------------------------------------------------------------------------------------------
@@ -275,24 +523,37 @@ func release_slot(p: Participant) -> void:
 
 
 ## Выбор слота игроком. Если место занято ботом своей команды, бот уступает и выбирает другую технику.
+## На клиенте сетевой игры запрос уходит хосту (результат приходит с обновлением состава).
 func request_player_slot(type_id: String) -> bool:
 	if player == null or not is_available(type_id):
 		return false
-	if reserve_slot(player, type_id):
+	if Net.is_client():
+		if player.has_live_vehicle():
+			return false
+		Net.request_slot(type_id)
 		return true
-	if player.has_live_vehicle():
+	return request_slot_for(player, type_id)
+
+
+## Выбор слота участником-человеком (игрок хоста или клиент сетевой игры): бот своей стороны уступает.
+func request_slot_for(who: Participant, type_id: String) -> bool:
+	if who == null or not is_available(type_id):
+		return false
+	if reserve_slot(who, type_id):
+		return true
+	if who.has_live_vehicle():
 		return false
 	var role := GameDB.role_of(type_id)
 	var bumped: Participant = null
-	if slot_count(player.team, type_id) >= slot_max(type_id):
-		for p in get_slot_holders(player.team, type_id):
-			if not p.is_player and not p.has_live_vehicle():
+	if slot_count(who.team, type_id) >= slot_max(type_id):
+		for p in get_slot_holders(who.team, type_id):
+			if not p.is_human and not p.has_live_vehicle():
 				bumped = p
 				break
-	elif role_full(player.team, role):
+	elif role_full(who.team, role):
 		for t in GameDB.types_with_role(role):
-			for p in get_slot_holders(player.team, t):
-				if not p.is_player and not p.has_live_vehicle():
+			for p in get_slot_holders(who.team, t):
+				if not p.is_human and not p.has_live_vehicle():
 					bumped = p
 					break
 			if bumped != null:
@@ -300,7 +561,7 @@ func request_player_slot(type_id: String) -> bool:
 	if bumped == null:
 		return false
 	release_slot(bumped)
-	if not reserve_slot(player, type_id):
+	if not reserve_slot(who, type_id):
 		return false
 	var alt := BotAI.choose_vehicle_type(self, bumped.team, rng)
 	if alt != "":
@@ -311,6 +572,8 @@ func request_player_slot(type_id: String) -> bool:
 
 # --- Матч -------------------------------------------------------------------------------------------------
 func start_battle() -> void:
+	if Net.is_client():
+		return
 	if player == null:
 		prepare_lobby()
 	if player.vehicle_type == "":
@@ -333,7 +596,11 @@ func start_battle() -> void:
 		p.score = 0
 		p.alive = false
 		p.vehicle = null
+		if not p.is_player:
+			p.net_ready = false
 	get_tree().paused = false
+	if Net.is_host():
+		Net.host_match_starting(net_match_info())
 	get_tree().change_scene_to_file(BATTLE_SCENE)
 
 
@@ -341,36 +608,50 @@ func start_battle() -> void:
 func on_level_ready(p_level: BattleLevel) -> void:
 	level = p_level
 	match_running = true
+	_smoke_battle_time = 0.0
+	MusicPlayer.play_battle()
+	if Net.is_client():
+		Net.on_level_ready(p_level)
+		match_started.emit()
+		announcement.emit("%s · %s" % [MapPresets.map_name(map_id).to_upper(), "КАЖДЫЙ САМ ЗА СЕБЯ" if ffa else "КОМАНДНЫЙ БОЙ"], Color(0.4, 0.95, 1.0))
+		return
 	for p in participants:
 		p.alive = false
 		p.vehicle = null
-		if p.vehicle_type != "":
+		if p.vehicle_type != "" and (not p.is_human or p.is_player):
 			spawn_participant(p)
 		else:
-			p.respawn_timer = 0.5 if p.is_player else rng.randf_range(1.0, 3.0)
+			p.respawn_timer = 0.5 if p.is_human else rng.randf_range(1.0, 3.0)
 	match_started.emit()
-	MusicPlayer.play_battle()
-	_smoke_battle_time = 0.0
-	announcement.emit("%s · ЛИМИТ %d ОЧКОВ" % [MapPresets.map_name(map_id).to_upper(), score_limit], Color(0.4, 0.95, 1.0))
+	var limit_text := "ЛИЧНЫЙ ЛИМИТ %d ОЧКОВ" % effective_score_limit() if ffa else "ЛИМИТ %d ОЧКОВ" % score_limit
+	announcement.emit("%s · %s" % [MapPresets.map_name(map_id).to_upper(), limit_text], Color(0.4, 0.95, 1.0))
+	if Net.is_host():
+		Net.on_level_ready(p_level)
 
 
 func spawn_participant(p: Participant) -> Vehicle:
-	if level == null or p.vehicle_type == "":
+	if level == null or p.vehicle_type == "" or not is_authority():
 		return null
 	var v := create_vehicle(p.vehicle_type)
 	v.team = p.team
 	v.participant_id = p.id
 	v.pilot_name = p.name
 	v.is_player = p.is_player
+	v.is_human = p.is_human
+	var remote := p.is_human and not p.is_player
+	if remote:
+		v.net_owner = p.peer_id
+		v.net_puppet = true
 	v.transform = level.pick_spawn_transform(p.team, GameDB.category_of(p.vehicle_type), GameDB.role_of(p.vehicle_type) == "ship")
-	var bot_driven := not p.is_player or (smoke_test and not smoke_human)
-	if bot_driven:
+	var bot_driven := not p.is_human or (p.is_player and smoke_test and not smoke_human)
+	if bot_driven and not remote:
 		v.add_child(BotAI.new())
 	level.add_unit(v)
 	p.vehicle = v
 	p.alive = true
 	p.respawn_timer = 0.0
 	unit_spawned.emit(v)
+	roster_changed.emit()
 	if p.is_player:
 		level.on_player_spawned(v, bot_driven)
 		player_spawned.emit(v)
@@ -398,10 +679,16 @@ func _process(delta: float) -> void:
 		_smoke_update(delta)
 	if not match_running or match_over or level == null:
 		return
+	if Net.is_client():
+		time_left = maxf(time_left - delta, 0.0)
+		for p in participants:
+			if not p.alive:
+				p.respawn_timer = maxf(p.respawn_timer - delta, 0.0)
+		return
 	time_left -= delta
 	if time_left <= 0.0:
 		time_left = 0.0
-		_finish_match(_leading_team())
+		_finish_match(_leader())
 		return
 	for p in participants:
 		if p.alive:
@@ -409,8 +696,8 @@ func _process(delta: float) -> void:
 		p.respawn_timer -= delta
 		if p.respawn_timer > 0.0:
 			continue
-		if p.is_player and not smoke_test:
-			if p.vehicle_type != "":
+		if p.is_human and not (p.is_player and smoke_test):
+			if p.vehicle_type != "" and (p.is_player or p.net_ready):
 				spawn_participant(p)
 			continue
 		if p.vehicle_type == "":
@@ -430,26 +717,39 @@ func report_destroyed(v: Vehicle, killer: Dictionary) -> void:
 		p.alive = false
 		p.vehicle = null
 		release_slot(p)
-		p.respawn_timer = PLAYER_RESPAWN_DELAY if p.is_player else BOT_RESPAWN_DELAY
+		p.respawn_timer = PLAYER_RESPAWN_DELAY if p.is_human else BOT_RESPAWN_DELAY
 	var value := GameDB.score_for_vehicle(v.vehicle_type)
 	var killer_team := int(killer.get("team", -1))
 	var killer_id := int(killer.get("attacker_id", -1))
+	var kp := get_participant(killer_id)
 	var text := ""
 	var color := GameDB.team_color(GameDB.enemy_team(v.team))
-	if killer_team >= 0 and killer_team != v.team:
-		add_score(killer_team, value)
-		var kp := get_participant(killer_id)
+	var credited := false
+	if ffa:
+		credited = kp != null and killer_id != v.participant_id
+	else:
+		credited = killer_team >= 0 and killer_team != v.team
+	if credited:
+		if not ffa:
+			add_score(killer_team, value)
 		if kp != null:
 			kp.kills += 1
 			kp.score += value
 		text = "%s [%s]  »  %s [%s]" % [str(killer.get("attacker_name", "?")), str(killer.get("vehicle_label", "")), v.pilot_name, victim_label]
 		color = GameDB.team_color(killer_team)
+		if ffa:
+			color = GameDB.team_color(0) if kp != null and kp.is_player else FFA_KILL_COLOR
+			_check_ffa_limit(kp)
 		if player != null and killer_id == player.id:
 			player_hit.emit(v, 0.0, true)
 	else:
-		add_score(GameDB.enemy_team(v.team), int(value * 0.5))
+		if not ffa:
+			add_score(GameDB.enemy_team(v.team), int(value * 0.5))
 		text = "%s [%s] потерян" % [v.pilot_name, victim_label]
+		if ffa:
+			color = Color(0.75, 0.8, 0.85)
 	kill_feed.emit(text, color)
+	roster_changed.emit()
 	if smoke_test:
 		var pos := v.global_position
 		var agl := pos.y - level.terrain.get_surface_height(pos.x, pos.z) if level != null else 0.0
@@ -470,11 +770,16 @@ func report_recalled(v: Vehicle) -> void:
 	p.vehicle = null
 	release_slot(p)
 	p.respawn_timer = 2.0
+	roster_changed.emit()
 	if v.is_player:
 		player_died.emit({"recall": true})
 
 
 func recall_player_vehicle() -> void:
+	if Net.is_client():
+		if player != null and player.has_live_vehicle():
+			Net.request_recall()
+		return
 	if player != null and player.has_live_vehicle():
 		player.vehicle.despawn()
 
@@ -483,17 +788,27 @@ func report_structure_destroyed(b: Building, killer: Dictionary) -> void:
 	var killer_team := int(killer.get("team", -1))
 	var killer_id := int(killer.get("attacker_id", -1))
 	var owner_name := "нейтр." if b.team < 0 else GameDB.team_name(b.team)
-	if b.team >= 0 and killer_team >= 0 and killer_team != b.team:
+	var kp := get_participant(killer_id)
+	if ffa:
+		if b.team >= 0 and kp != null:
+			kp.score += b.score_value
+			_check_ffa_limit(kp)
+			if player != null and killer_id == player.id:
+				player_hit.emit(b, 0.0, true)
+	elif b.team >= 0 and killer_team >= 0 and killer_team != b.team:
 		add_score(killer_team, b.score_value)
-		var kp := get_participant(killer_id)
 		if kp != null:
 			kp.score += b.score_value
 		if player != null and killer_id == player.id:
 			player_hit.emit(b, 0.0, true)
 	var who := str(killer.get("attacker_name", ""))
 	var text := "%s  »  %s (%s)" % [who if who != "" else "Взрыв", b.display_name, owner_name]
-	kill_feed.emit(text, GameDB.team_color(killer_team))
+	var color := GameDB.team_color(killer_team)
+	if ffa:
+		color = GameDB.team_color(0) if kp != null and kp.is_player else FFA_KILL_COLOR
+	kill_feed.emit(text, color)
 	structure_destroyed.emit(b, killer)
+	roster_changed.emit()
 
 
 func report_damage(target: Node, amount: float, source: Dictionary) -> void:
@@ -515,7 +830,7 @@ func report_explosion(pos: Vector3, radius: float) -> void:
 
 
 func add_score(team: int, amount: int) -> void:
-	if team < 0 or team > 1 or match_over or amount <= 0:
+	if team < 0 or team > 1 or match_over or amount <= 0 or ffa:
 		return
 	scores[team] += amount
 	score_changed.emit(team, scores[team])
@@ -523,12 +838,38 @@ func add_score(team: int, amount: int) -> void:
 		_finish_match(team)
 
 
-func _leading_team() -> int:
+func _check_ffa_limit(p: Participant) -> void:
+	if p == null or match_over:
+		return
+	score_changed.emit(p.team, p.score)
+	if p.score >= effective_score_limit():
+		_finish_match(p.id)
+
+
+## Лидер матча: команда (командный бой) или id участника (ffa); -1 — ничья.
+func _leader() -> int:
+	if ffa:
+		var best: Participant = null
+		var tie := false
+		for p in participants:
+			if best == null or p.score > best.score:
+				best = p
+				tie = false
+			elif p.score == best.score:
+				tie = true
+		return -1 if best == null or tie else best.id
 	if scores[0] > scores[1]:
 		return 0
 	if scores[1] > scores[0]:
 		return 1
 	return -1
+
+
+## Участники по убыванию очков (таблица ffa и итоги матча).
+func ranked_participants() -> Array[Participant]:
+	var sorted: Array[Participant] = participants.duplicate()
+	sorted.sort_custom(func(a: Participant, b: Participant) -> bool: return a.score > b.score or (a.score == b.score and a.kills > b.kills))
+	return sorted
 
 
 func _finish_match(w: int) -> void:
@@ -540,11 +881,29 @@ func _finish_match(w: int) -> void:
 
 
 func return_to_menu() -> void:
+	if Net.active():
+		Net.leave()
 	match_running = false
 	match_over = false
 	level = null
 	units.clear()
 	structures.clear()
+	get_tree().paused = false
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	get_tree().change_scene_to_file(MENU_SCENE)
+
+
+## Сетевая игра: после матча — обратно в лобби той же сессии (меню откроет экран лобби).
+func return_to_lobby() -> void:
+	match_running = false
+	match_over = false
+	level = null
+	units.clear()
+	structures.clear()
+	for p in participants:
+		p.alive = false
+		p.vehicle = null
+		p.net_ready = false
 	get_tree().paused = false
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	get_tree().change_scene_to_file(MENU_SCENE)
@@ -601,12 +960,17 @@ func count_units(team: int, type_id: String = "", category: int = -1) -> int:
 	return n
 
 
-## Живые вражеские юниты в радиусе (category < 0 — любые).
-func enemies_in_radius(team: int, pos: Vector3, radius: float, category: int = -1) -> Array[Vehicle]:
+## Живые вражеские юниты в радиусе (category < 0 — любые). pid — id участника-наблюдателя
+## (в режиме «каждый сам за себя» враги определяются по участнику, а не по стороне).
+func enemies_in_radius(team: int, pos: Vector3, radius: float, category: int = -1, pid: int = -1) -> Array[Vehicle]:
 	var result: Array[Vehicle] = []
 	var r2 := radius * radius
 	for v in units:
-		if not is_instance_valid(v) or v.is_dead or v.team == team or v.team < 0:
+		if not is_instance_valid(v) or v.is_dead or v.team < 0:
+			continue
+		if are_allies(team, pid, v.team, v.participant_id):
+			continue
+		if ffa and pid < 0 and v.team == team:
 			continue
 		if category >= 0 and v.category != category:
 			continue
@@ -615,11 +979,14 @@ func enemies_in_radius(team: int, pos: Vector3, radius: float, category: int = -
 	return result
 
 
+## Вражеские сооружения в радиусе. В режиме «каждый сам за себя» — сооружения обеих баз.
 func enemy_structures_in_radius(team: int, pos: Vector3, radius: float) -> Array[Building]:
 	var result: Array[Building] = []
 	var r2 := radius * radius
 	for b in structures:
-		if not is_instance_valid(b) or b.is_dead or b.team < 0 or b.team == team:
+		if not is_instance_valid(b) or b.is_dead or b.team < 0:
+			continue
+		if not ffa and b.team == team:
 			continue
 		if b.global_position.distance_squared_to(pos) <= r2:
 			result.append(b)
@@ -657,7 +1024,8 @@ func _smoke_update(delta: float) -> void:
 		_smoke_human_input(delta)
 	if not smoke_menu and (_smoke_battle_time >= smoke_seconds or _smoke_elapsed > smoke_seconds + 120.0):
 		_print_smoke_summary()
-		get_tree().quit(0)
+		smoke_seconds = INF
+		Net.quit_after_leave(0)
 
 
 ## Автотест ручного управления: имитация нажатий клавиш и движения мыши игроком.
@@ -728,7 +1096,13 @@ func _save_screenshot() -> void:
 	print("[SMOKE] screenshot: ", path)
 
 
+func print_net_summary() -> void:
+	if Net.active() or not Net.stats.is_empty():
+		print(Net.summary())
+
+
 func _print_smoke_summary() -> void:
+	print_net_summary()
 	print("[SMOKE] map=%s era=%d elapsed=%.1f s (battle %.1f s), units alive=%d, structures=%d, score=%d:%d" % [map_id, air_era, _smoke_elapsed, _smoke_battle_time, get_live_units().size(), structures.size(), scores[0], scores[1]])
 	for p in participants:
 		print("[SMOKE]   %s team=%d vehicle=%s kills=%d deaths=%d score=%d" % [p.name, p.team, p.vehicle_type, p.kills, p.deaths, p.score])

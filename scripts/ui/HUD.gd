@@ -55,6 +55,7 @@ var _end_title: Label = null
 var _end_details: Label = null
 var _scoreboard: PanelContainer = null
 var _scoreboard_text: RichTextLabel = null
+var _again_button: Button = null
 
 var _vehicle: Vehicle = null
 var _help_timer: float = 12.0
@@ -72,6 +73,7 @@ func setup(p_level: BattleLevel, p_pc: PlayerController, p_rig: CameraRig) -> vo
 	_build()
 	GlobalBattleManager.kill_feed.connect(_on_kill_feed)
 	GlobalBattleManager.score_changed.connect(func(_t: int, _s: int) -> void: _update_scores())
+	GlobalBattleManager.roster_changed.connect(_update_scores)
 	GlobalBattleManager.match_ended.connect(_on_match_ended)
 	GlobalBattleManager.player_died.connect(_on_player_died)
 	GlobalBattleManager.player_spawned.connect(_on_player_spawned)
@@ -267,9 +269,13 @@ func _build_end_panel() -> void:
 	var again := UITheme.make_button("РЕВАНШ", Vector2(250.0, 54.0), 21)
 	again.pressed.connect(func() -> void:
 		get_tree().paused = false
-		GlobalBattleManager.restart_match()
+		if Net.is_host():
+			Net.host_back_to_lobby()
+		elif not Net.active():
+			GlobalBattleManager.restart_match()
 	)
 	row.add_child(again)
+	_again_button = again
 	var menu := UITheme.make_button("В МЕНЮ", Vector2(250.0, 54.0), 21)
 	menu.pressed.connect(_quit_to_menu)
 	row.add_child(menu)
@@ -328,7 +334,11 @@ func _layout() -> void:
 	var s := _root.size
 	var safe := GameSettings.safe_rect(s)
 	_top_panel.position = Vector2((s.x - _top_panel.size.x) * 0.5, 10.0)
-	_feed_box.position = Vector2(safe.end.x - _feed_box.size.x - 16.0, 14.0)
+	var feed_x := safe.end.x - _feed_box.size.x - 16.0
+	var feed_y := 14.0
+	if feed_x < _top_panel.position.x + _top_panel.size.x + 8.0:
+		feed_y = _top_panel.position.y + _top_panel.size.y + 8.0
+	_feed_box.position = Vector2(feed_x, feed_y)
 	_message_label.size = Vector2(s.x, 40.0)
 	_message_label.position = Vector2(0.0, s.y * 0.2)
 	_warning_label.size = Vector2(s.x, 40.0)
@@ -463,6 +473,21 @@ func _on_kill_feed(text: String, color: Color) -> void:
 
 func _update_scores() -> void:
 	var gbm := GlobalBattleManager
+	if gbm.ffa:
+		# Каждый сам за себя: слева — свои очки и место, справа — лидер.
+		var ranked := gbm.ranked_participants()
+		var limit := float(maxi(gbm.effective_score_limit(), 1))
+		var me := gbm.player
+		var place := ranked.find(me) + 1 if me != null else 0
+		var mine := me.score if me != null else 0
+		_score_labels[0].text = "ВЫ  %d  · %d-й" % [mine, place]
+		_score_bars[0].value = clampf(float(mine) / limit, 0.0, 1.0)
+		var leader: Participant = ranked[0] if not ranked.is_empty() else null
+		if leader != null and leader == me and ranked.size() > 1:
+			leader = ranked[1]
+		_score_labels[1].text = "%s  %d" % [leader.name.left(10).to_upper() if leader != null else "—", leader.score if leader != null else 0]
+		_score_bars[1].value = clampf(float(leader.score if leader != null else 0) / limit, 0.0, 1.0)
+		return
 	for team in 2:
 		_score_labels[team].text = "%s  %d" % [GameDB.team_name(team), gbm.scores[team]]
 		_score_bars[team].value = clampf(float(gbm.scores[team]) / float(maxi(gbm.score_limit, 1)), 0.0, 1.0)
@@ -527,6 +552,8 @@ func _on_tactical_changed(active: bool) -> void:
 func _on_match_ended(winner: int) -> void:
 	var gbm := GlobalBattleManager
 	var my := gbm.player_team
+	if gbm.ffa:
+		my = gbm.player.id if gbm.player != null else -2
 	if winner < 0:
 		_end_title.text = "НИЧЬЯ"
 		UITheme.glow_label(_end_title, UITheme.TEXT, 3, 12)
@@ -537,23 +564,38 @@ func _on_match_ended(winner: int) -> void:
 		_end_title.text = "ПОРАЖЕНИЕ"
 		UITheme.glow_label(_end_title, UITheme.DANGER, 3, 14)
 	var lines := PackedStringArray()
-	lines.append("Счёт: %s %d — %d %s" % [GameDB.team_name(0), gbm.scores[0], gbm.scores[1], GameDB.team_name(1)])
+	var sorted := gbm.ranked_participants()
+	if gbm.ffa:
+		var champ := gbm.get_participant(winner)
+		if champ != null:
+			lines.append("Победитель: %s — %d очков" % [champ.name, champ.score])
+		if gbm.player != null:
+			lines.append("Ваше место: %d из %d" % [sorted.find(gbm.player) + 1, sorted.size()])
+	else:
+		lines.append("Счёт: %s %d — %d %s" % [GameDB.team_name(0), gbm.scores[0], gbm.scores[1], GameDB.team_name(1)])
 	if gbm.player != null:
 		lines.append("Ваш результат: уничтожено %d · потеряно %d · очки %d" % [gbm.player.kills, gbm.player.deaths, gbm.player.score])
 	lines.append("")
 	lines.append("Лучшие участники:")
-	var sorted := gbm.participants.duplicate()
-	sorted.sort_custom(func(a: Participant, b: Participant) -> bool: return a.score > b.score)
 	for i in mini(5, sorted.size()):
 		var p: Participant = sorted[i]
-		lines.append("  %d. %s (%s) — %d очк., %d/%d" % [i + 1, p.name, GameDB.team_name(p.team), p.score, p.kills, p.deaths])
+		var side := "" if gbm.ffa else " (%s)" % GameDB.team_name(p.team)
+		lines.append("  %d. %s%s%s — %d очк., %d/%d" % [i + 1, p.name, " ★" if p.is_human and Net.active() else "", side, p.score, p.kills, p.deaths])
+	if Net.is_client():
+		lines.append("")
+		lines.append("Следующий бой начнёт хост — вы вернётесь в лобби автоматически.")
+	elif Net.is_host() and Net.is_public():
+		lines.append("")
+		lines.append("Через %d с все вернутся в лобби, затем начнётся новый бой." % int(Net.PUBLIC_REMATCH))
 	_end_details.text = "\n".join(lines)
+	_again_button.visible = not Net.is_client()
+	_again_button.text = "В ЛОББИ" if Net.is_host() else "РЕВАНШ"
 	var tw := create_tween()
 	tw.tween_interval(1.5)
 	tw.tween_callback(func() -> void:
 		_close_all_panels()
 		_end_panel.visible = true
-		get_tree().paused = true
+		get_tree().paused = not Net.active()
 		MusicPlayer.play_menu()
 		pc.update_mouse_mode()
 	)
@@ -585,7 +627,8 @@ func open_pause() -> void:
 		pc.exit_tactical()
 	_respawn_panel.visible = false
 	_pause_panel.visible = true
-	get_tree().paused = true
+	# В сетевой игре бой не останавливается — меню открывается поверх.
+	get_tree().paused = not Net.active()
 	MusicPlayer.duck(true)
 	pc.update_mouse_mode()
 
@@ -645,6 +688,19 @@ func _unhandled_input(event: InputEvent) -> void:
 
 func _refresh_scoreboard() -> void:
 	var gbm := GlobalBattleManager
+	if gbm.ffa:
+		var s := "[center][b]КАЖДЫЙ САМ ЗА СЕБЯ[/b]  ·  личный лимит %d  ·  %s[/center]\n" % [gbm.effective_score_limit(), GameDB.format_time(gbm.time_left)]
+		s += "[table=6][cell][color=#8aa][b]#  [/b][/color][/cell][cell][color=#8aa][b]Позывной  [/b][/color][/cell][cell][color=#8aa][b]Техника  [/b][/color][/cell][cell][color=#8aa][b]Очки  [/b][/color][/cell][cell][color=#8aa][b]Уничт.  [/b][/color][/cell][cell][color=#8aa][b]Потери[/b][/color][/cell]"
+		var place := 0
+		for p in gbm.ranked_participants():
+			place += 1
+			var who := "[color=#ffb020]%s (вы)[/color]" % p.name if p.is_player else ("%s ★" % p.name if p.is_human else p.name)
+			s += "[cell]%d  [/cell][cell]%s  [/cell][cell]%s  [/cell][cell]%d[/cell][cell]%d[/cell][cell]%d[/cell]" % [place, who, p.get_vehicle_label(), p.score, p.kills, p.deaths]
+			if place >= 16:
+				break
+		s += "[/table]"
+		_scoreboard_text.text = s
+		return
 	var t := "[center][b]СЧЁТ  %s %d — %d %s[/b]  ·  лимит %d  ·  %s[/center]\n" % [GameDB.team_name(0), gbm.scores[0], gbm.scores[1], GameDB.team_name(1), gbm.score_limit, GameDB.format_time(gbm.time_left)]
 	for team in 2:
 		var hex := GameDB.team_color(team).to_html(false)
@@ -654,7 +710,7 @@ func _refresh_scoreboard() -> void:
 		members.sort_custom(func(a: Participant, b: Participant) -> bool: return a.score > b.score)
 		for p in members:
 			var status := "в бою" if p.alive else "ожидание"
-			var who := "%s (вы)" % p.name if p.is_player else p.name
+			var who := "%s (вы)" % p.name if p.is_player else ("%s ★" % p.name if p.is_human and Net.active() else p.name)
 			t += "[cell]%s  [/cell][cell]%s  [/cell][cell]%d[/cell][cell]%d[/cell][cell]%d[/cell][cell]%s[/cell]" % [who, p.get_vehicle_label(), p.score, p.kills, p.deaths, status]
 		t += "[/table]\n"
 	_scoreboard_text.text = t

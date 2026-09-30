@@ -220,7 +220,7 @@ func refresh() -> void:
 		var role := GameDB.role_of(type_id)
 		var bot_held := false
 		for p in gbm.get_slot_holders(team, type_id):
-			if not p.is_player:
+			if not p.is_human:
 				bot_held = true
 		var role_blocked := gbm.role_full(team, role) and not (me != null and me.vehicle_type != "" and GameDB.role_of(me.vehicle_type) == role)
 		var full := used >= max_slots or role_blocked

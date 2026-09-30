@@ -128,6 +128,13 @@ func _target_velocity() -> Vector3:
 func _lose_target() -> void:
 	if target != null:
 		GlobalBattleManager.smoke_count("missile_lost_target")
+		if net_id != 0 and not net_visual:
+			Net.on_projectile_lost(self)
+	_unregister()
+	target = null
+
+
+func net_lose_target() -> void:
 	_unregister()
 	target = null
 
@@ -142,6 +149,8 @@ func consider_decoy(flare: Node3D) -> void:
 	if randf() < (1.0 - flare_resistance) * 0.7:
 		_unregister()
 		target = flare
+		if net_id != 0 and not net_visual:
+			Net.on_projectile_lost(self)
 		GlobalBattleManager.smoke_count("missile_decoyed")
 
 

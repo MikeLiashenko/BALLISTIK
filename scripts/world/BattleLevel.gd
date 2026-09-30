@@ -117,7 +117,8 @@ func _generate() -> void:
 	_set_stage(6, 0.96)
 	await get_tree().process_frame
 	_build_spawn_points()
-	_spawn_warships()
+	if not Net.is_client() and not GlobalBattleManager.ffa:
+		_spawn_warships()
 	_create_player_systems()
 	ready_for_battle = true
 	print("[LEVEL] %s (%s): %d ms, сетка %d, чанков %d" % [layout.map_id, MapPresets.map_name(layout.map_id), Time.get_ticks_msec() - t0, res, (data["meshes"] as Array).size()])
@@ -223,6 +224,7 @@ func _hide_loading() -> void:
 # --- Базы и сооружения ------------------------------------------------------------------------------------
 func _add_building(kind: String, team: int, pos: Vector3, yaw: float, fixed_y: bool = false, variant: int = 0) -> Building:
 	var b := Building.new().setup(kind, team, variant)
+	b.net_key = Net.make_structure_key(kind, pos)
 	b.name = "%s_%d" % [kind, structures_root.get_child_count()]
 	var y := pos.y if fixed_y else terrain.get_height(pos.x, pos.z)
 	b.position = Vector3(pos.x, y, pos.z)
@@ -370,6 +372,7 @@ func _spawn_warships() -> void:
 
 func add_unit(v: Vehicle) -> void:
 	units_root.add_child(v)
+	Net.on_unit_added(v)
 
 
 ## Тактический вид: убрать облака и туман, чтобы карта читалась сверху.
@@ -382,6 +385,7 @@ func set_tactical_view(active: bool) -> void:
 
 func spawn_projectile(p: Node3D) -> void:
 	projectiles_root.add_child(p)
+	Net.on_projectile_spawned(p)
 	if GlobalBattleManager.smoke_test:
 		GlobalBattleManager.smoke_count("spawned_" + p.get_script().get_global_name())
 

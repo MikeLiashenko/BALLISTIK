@@ -150,7 +150,9 @@ func _draw_vignette() -> void:
 
 
 func _draw_unit_markers(cam: Camera3D, v: Vehicle, tactical: bool) -> void:
-	var my_team := GlobalBattleManager.player_team
+	var gbm := GlobalBattleManager
+	var my_team := gbm.player_team
+	var my_pid := gbm.player.id if gbm.player != null else -1
 	var eye := cam.global_position
 	var center := size * 0.5
 	var best: Vehicle = null
@@ -161,7 +163,7 @@ func _draw_unit_markers(cam: Camera3D, v: Vehicle, tactical: bool) -> void:
 			continue
 		var pos := u.get_global_transform_interpolated().origin + Vector3.UP * (u.hit_radius * 0.6 + 2.0)
 		var dist := eye.distance_to(pos)
-		var enemy := u.team != my_team
+		var enemy := not gbm.are_allies(my_team, my_pid, u.team, u.participant_id)
 		if enemy and dist > enemy_range:
 			continue
 		if not enemy and dist > (6000.0 if tactical else 900.0):

@@ -16,6 +16,13 @@ var team: int = 0
 var participant_id: int = -1
 var pilot_name: String = ""
 var is_player: bool = false
+## Техникой управляет человек (на этом устройстве или по сети) — для сложности и приоритетов ботов.
+var is_human: bool = false
+## Сетевая игра: id юнита, пир-владелец движения (1 — хост) и режим «марионетки» — техника чужого
+## устройства, положение которой интерполируется по снимкам состояния, без собственной физики.
+var net_id: int = 0
+var net_owner: int = 1
+var net_puppet: bool = false
 var max_health: float = 100.0
 var health: float = 100.0
 var is_dead: bool = false
@@ -38,6 +45,8 @@ var _damage_fx: Node3D = null
 var _damage_stage: int = 0
 var _engine_audio: AudioStreamPlayer3D = null
 var _rng := RandomNumberGenerator.new()
+## Буфер снимков марионетки: [время (локальные часы), позиция, поворот, скорость, прицел, доп. параметр].
+var _net_states: Array = []
 
 
 func _ready() -> void:
@@ -95,6 +104,9 @@ func damage_fx_offset() -> Vector3:
 func _physics_process(delta: float) -> void:
 	if is_dead:
 		return
+	if net_puppet:
+		_net_puppet_step(delta)
+		return
 	spawn_protection = maxf(spawn_protection - delta, 0.0)
 	for w in weapons:
 		w.update(delta)
@@ -144,12 +156,16 @@ func apply_damage(amount: float, damage_type: String, source: Dictionary) -> voi
 	if is_dead or amount <= 0.0:
 		return
 	var src_team := int(source.get("team", -1))
-	if src_team == team:
+	if GlobalBattleManager.are_allies(src_team, int(source.get("attacker_id", -1)), team, participant_id):
 		return
 	if spawn_protection > 0.0 and damage_type != "environment":
 		return
+	if Net.is_client():
+		# Урон считает хост: клиент передаёт попадания своих снарядов и повреждения своей техники.
+		Net.forward_damage(self, amount, damage_type, source)
+		return
 	var dmg := amount * float(damage_modifiers.get(damage_type, 1.0))
-	if is_player and bool(source.get("bot", false)):
+	if is_human and bool(source.get("bot", false)):
 		dmg *= float(GameDB.difficulty(GlobalBattleManager.difficulty).get("damage", 1.0))
 	if dmg <= 0.0:
 		return
@@ -167,6 +183,13 @@ func apply_damage(amount: float, damage_type: String, source: Dictionary) -> voi
 func destroy(killer: Dictionary = {}) -> void:
 	if is_dead:
 		return
+	if Net.is_client():
+		# Марионетки гибнут только по команде хоста; своя техника (крушение) — сразу, с отчётом хосту.
+		if net_puppet:
+			return
+		Net.request_self_destroy(self, killer)
+		net_kill(killer)
+		return
 	is_dead = true
 	health = 0.0
 	var k := killer
@@ -180,13 +203,45 @@ func destroy(killer: Dictionary = {}) -> void:
 	_on_destroyed()
 	destroyed.emit(self, k)
 	GlobalBattleManager.report_destroyed(self, k)
+	Net.on_unit_destroyed(self, k)
 	GlobalBattleManager.unregister_unit(self)
+	queue_free()
+
+
+## Гибель техники по сообщению хоста (или крушение своей техники на клиенте): только эффекты,
+## без начисления очков — их считает хост.
+func net_kill(killer: Dictionary) -> void:
+	if is_dead:
+		return
+	is_dead = true
+	health = 0.0
+	collision_layer = 0
+	for m in incoming_missiles:
+		if is_instance_valid(m) and m.has_method("_lose_target"):
+			m.call("_lose_target")
+	incoming_missiles.clear()
+	_on_destroyed()
+	destroyed.emit(self, killer)
+	GlobalBattleManager.unregister_unit(self)
+	queue_free()
+
+
+## Отзыв техники по сообщению хоста (клиент сетевой игры).
+func net_despawn() -> void:
+	if is_dead:
+		return
+	is_dead = true
+	collision_layer = 0
+	incoming_missiles.clear()
+	destroyed.emit(self, {"recall": true})
+	GlobalBattleManager.unregister_unit(self)
+	Effects.puff(global_position + Vector3.UP * 2.0, Color(0.4, 0.9, 1.0, 0.8), 12.0, 0.6)
 	queue_free()
 
 
 ## Отзыв техники без уничтожения (смена класса игроком): слот освобождается, очки не начисляются.
 func despawn() -> void:
-	if is_dead:
+	if is_dead or Net.is_client():
 		return
 	is_dead = true
 	collision_layer = 0
@@ -197,6 +252,7 @@ func despawn() -> void:
 	var info := {"recall": true}
 	destroyed.emit(self, info)
 	GlobalBattleManager.report_recalled(self)
+	Net.on_unit_despawned(self)
 	GlobalBattleManager.unregister_unit(self)
 	Effects.puff(global_position + Vector3.UP * 2.0, Color(0.4, 0.9, 1.0, 0.8), 12.0, 0.6)
 	queue_free()
@@ -272,7 +328,7 @@ func make_source(weapon_name: String) -> Dictionary:
 		"attacker_name": pilot_name,
 		"vehicle_label": GameDB.vehicle_name(vehicle_type, team),
 		"weapon": weapon_name,
-		"bot": not is_player,
+		"bot": not is_human,
 	}
 
 
@@ -290,7 +346,7 @@ func find_target_in_cone(dir: Vector3, cone_deg: float, max_range: float, mode: 
 	var origin := global_position + origin_offset
 	var best: Vehicle = null
 	var best_score := INF
-	for v in GlobalBattleManager.enemies_in_radius(team, origin, max_range):
+	for v in GlobalBattleManager.enemies_in_radius(team, origin, max_range, -1, participant_id):
 		if mode == "air" and v.category != GameDB.Category.AIR:
 			continue
 		if mode == "surface" and v.category == GameDB.Category.AIR:
@@ -383,3 +439,103 @@ func weapon_labels() -> Dictionary:
 
 func camera_offset() -> Vector2:
 	return Vector2(16.0, 4.0)
+
+
+# --- Сетевая синхронизация --------------------------------------------------------------------------------
+const NET_STATE_SIZE := 16
+
+## Точка прицеливания башен для отображения на других устройствах (null — нет).
+func net_aim() -> Variant:
+	return controls.aim_point if controls.has_aim else null
+
+
+## Дополнительный параметр снимка (у самолёта — РУД для форсажа и винтов).
+func net_extra() -> float:
+	return 0.0
+
+
+func net_apply_extra(_value: float) -> void:
+	pass
+
+
+## Снимок состояния: id, позиция, поворот, скорость, прицел, ХП, доп. параметр (+2 — прицел есть).
+func net_write_state(out: PackedFloat32Array) -> void:
+	var p := global_position
+	var q := global_basis.get_rotation_quaternion()
+	var aim: Variant = net_aim()
+	var a: Vector3 = aim if aim != null else Vector3.ZERO
+	out.append_array(PackedFloat32Array([float(net_id), p.x, p.y, p.z, q.x, q.y, q.z, q.w, velocity.x, velocity.y, velocity.z, a.x, a.y, a.z, health, net_extra() + (2.0 if aim != null else 0.0)]))
+
+
+## Принять снимок (t — момент снимка в локальных часах).
+func net_push_state(t: float, d: PackedFloat32Array, i: int) -> void:
+	var extra := d[i + 15]
+	var has_aim := extra >= 1.5
+	var st := [t, Vector3(d[i + 1], d[i + 2], d[i + 3]), Quaternion(d[i + 4], d[i + 5], d[i + 6], d[i + 7]).normalized(), Vector3(d[i + 8], d[i + 9], d[i + 10]), Vector3(d[i + 11], d[i + 12], d[i + 13]), has_aim, extra - (2.0 if has_aim else 0.0)]
+	var n := _net_states.size()
+	if n > 0 and float(_net_states[n - 1][0]) >= t:
+		return
+	_net_states.append(st)
+	if _net_states.size() > 24:
+		_net_states.remove_at(0)
+
+
+## ХП от хоста (для своей техники и марионеток на клиенте).
+func net_set_health(hp: float) -> void:
+	if is_dead or absf(hp - health) < 0.01:
+		return
+	health = clampf(hp, 0.0, max_health)
+	health_changed.emit(self, health, max_health)
+	_update_damage_fx()
+
+
+func _net_puppet_step(delta: float) -> void:
+	spawn_protection = maxf(spawn_protection - delta, 0.0)
+	_clean_missiles()
+	var n := _net_states.size()
+	if n > 0:
+		var rt := Net.now() - Net.INTERP_DELAY
+		while _net_states.size() > 2 and float(_net_states[1][0]) < rt - 0.5:
+			_net_states.remove_at(0)
+		n = _net_states.size()
+		var pos: Vector3
+		var rot: Quaternion
+		var vel: Vector3
+		var st: Array = _net_states[n - 1]
+		if rt >= float(st[0]):
+			var ahead := minf(rt - float(st[0]), 0.3)
+			pos = (st[1] as Vector3) + (st[3] as Vector3) * ahead
+			rot = st[2]
+			vel = st[3]
+		else:
+			st = _net_states[0]
+			pos = st[1]
+			rot = st[2]
+			vel = st[3]
+			for k in range(n - 1):
+				var a: Array = _net_states[k]
+				var b: Array = _net_states[k + 1]
+				if rt >= float(a[0]) and rt < float(b[0]):
+					var w := (rt - float(a[0])) / maxf(float(b[0]) - float(a[0]), 0.0001)
+					pos = (a[1] as Vector3).lerp(b[1], w)
+					rot = (a[2] as Quaternion).slerp(b[2], w)
+					vel = (a[3] as Vector3).lerp(b[3], w)
+					st = b
+					break
+		var jump := global_position.distance_to(pos) > 250.0
+		global_transform = Transform3D(Basis(rot), pos)
+		if jump:
+			reset_physics_interpolation()
+		velocity = vel
+		speed = vel.length() if category == GameDB.Category.AIR else vel.dot(get_forward())
+		controls.has_aim = bool(st[5])
+		controls.aim_point = st[4]
+		net_apply_extra(float(st[6]))
+	_puppet_visuals(delta)
+	if _engine_audio != null:
+		_engine_audio.pitch_scale = _engine_pitch()
+
+
+## Анимация марионетки: башни, винты, кильватер, антенны — без физики и стрельбы.
+func _puppet_visuals(_delta: float) -> void:
+	pass

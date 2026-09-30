@@ -71,7 +71,7 @@ func _draw() -> void:
 		if p2.length() > 1.0:
 			continue
 		var p := c + Vector2(p2.x * r, p2.y * ry)
-		var col := _team_color(b.team, 0.45)
+		var col := _team_color(b.team, 0.45) if not GlobalBattleManager.ffa else Color(1.0, 0.3, 0.25, 0.45)
 		draw_colored_polygon(PackedVector2Array([p + Vector2(0, -3.5), p + Vector2(3.5, 0), p + Vector2(0, 3.5), p + Vector2(-3.5, 0)]), col)
 	# Техника
 	for v in GlobalBattleManager.units:
@@ -82,15 +82,15 @@ func _draw() -> void:
 		var p2 := Vector2(rel.dot(right), -rel.dot(fwd)) / range_m
 		var dist_k := p2.length()
 		if dist_k > 1.0:
-			if v.category == GameDB.Category.AIR and dist_k < 1.5 and v.team != _my_team():
+			if v.category == GameDB.Category.AIR and dist_k < 1.5 and not _allied(v):
 				var edge := c + Vector2(p2.x / dist_k * r, p2.y / dist_k * ry)
-				draw_circle(edge, 2.5, _team_color(v.team, 0.7))
+				draw_circle(edge, 2.5, _unit_color(v, 0.7))
 			continue
 		var base := c + Vector2(p2.x * r, p2.y * ry)
 		var sweep_angle := atan2(p2.x, -p2.y)
 		var since := fposmod(_sweep - sweep_angle, TAU)
 		var brightness := 0.5 + 0.5 * exp(-since * 1.6)
-		var col := _team_color(v.team, brightness)
+		var col := _unit_color(v, brightness)
 		var p := base
 		if mode_3d:
 			var dy := clampf((pos3.y - center.y) / range_m * r * 1.4, -r * 0.8, r * 0.8)
@@ -129,3 +129,17 @@ func _team_color(team: int, alpha: float) -> Color:
 	if team == _my_team():
 		return Color(0.25, 0.9, 1.0, alpha)
 	return Color(1.0, 0.3, 0.25, alpha)
+
+
+func _allied(v: Vehicle) -> bool:
+	var gbm := GlobalBattleManager
+	var pid := gbm.player.id if gbm.player != null else -1
+	if owner_vehicle != null and is_instance_valid(owner_vehicle):
+		return gbm.vehicles_allied(owner_vehicle, v)
+	return gbm.are_allies(_my_team(), pid, v.team, v.participant_id)
+
+
+func _unit_color(v: Vehicle, alpha: float) -> Color:
+	if v.team < 0:
+		return Color(0.7, 0.7, 0.66, alpha)
+	return Color(0.25, 0.9, 1.0, alpha) if _allied(v) else Color(1.0, 0.3, 0.25, alpha)

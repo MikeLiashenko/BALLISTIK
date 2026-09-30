@@ -137,6 +137,15 @@ func _vehicle_physics(delta: float) -> void:
 		next = Vector3(pos.x, 0.0, pos.z)
 	global_transform = Transform3D(Basis(Vector3.UP, heading), next)
 	velocity = _drift
+	_animate_hull(delta, steer)
+
+
+func _puppet_visuals(delta: float) -> void:
+	_animate_hull(delta, 0.0)
+
+
+## Крен, подъём носа и качка корпуса, кильватер, антенны, наведение установок.
+func _animate_hull(delta: float, steer: float) -> void:
 	_bob_time += delta
 	var speed_k := clampf(absf(speed) / max_speed_fwd, 0.0, 1.0)
 	var rise := speed_k * planing

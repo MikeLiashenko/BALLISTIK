@@ -52,7 +52,7 @@ func _build_visual() -> void:
 func _acquire_near(point: Vector3) -> Node3D:
 	var best: Node3D = null
 	var best_score := INF
-	for v in GlobalBattleManager.enemies_in_radius(team, point, 160.0):
+	for v in GlobalBattleManager.enemies_in_radius(team, point, 160.0, -1, owner_pid()):
 		if v.category == GameDB.Category.AIR:
 			continue
 		var s := v.global_position.distance_to(point)

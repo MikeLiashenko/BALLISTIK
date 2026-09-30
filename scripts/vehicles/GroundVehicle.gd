@@ -143,3 +143,7 @@ func gun_origin() -> Vector3:
 ## Угол (град) между направлением ствола и направлением на точку.
 func aim_error_to(point: Vector3) -> float:
 	return rad_to_deg(gun_direction().angle_to(point - gun_origin()))
+
+
+func _puppet_visuals(delta: float) -> void:
+	_update_turret(delta)

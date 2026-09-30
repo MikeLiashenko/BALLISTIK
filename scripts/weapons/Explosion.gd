@@ -58,7 +58,8 @@ func _apply_damage() -> void:
 		if not body.has_method("apply_damage"):
 			continue
 		var body_team := int(body.call("get_team")) if body.has_method("get_team") else -1
-		if team >= 0 and body_team == team:
+		var body_pid := (body as Vehicle).participant_id if body is Vehicle else -1
+		if team >= 0 and GlobalBattleManager.are_allies(team, int(source.get("attacker_id", -1)), body_team, body_pid):
 			continue
 		var hit_radius := float(body.call("get_hit_radius")) if body.has_method("get_hit_radius") else 2.0
 		var dist := maxf(global_position.distance_to(body.global_position) - hit_radius, 0.0)

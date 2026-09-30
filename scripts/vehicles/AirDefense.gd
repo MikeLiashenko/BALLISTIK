@@ -279,7 +279,7 @@ func _update_lock(delta: float) -> void:
 		var desired: Vehicle = null
 		if is_instance_valid(controls.lock_target) and controls.lock_target is Vehicle:
 			var preferred := controls.lock_target as Vehicle
-			if not preferred.is_dead and preferred.category == GameDB.Category.AIR and preferred.team != team:
+			if not preferred.is_dead and preferred.category == GameDB.Category.AIR and not GlobalBattleManager.vehicles_allied(preferred, self):
 				if eye.distance_to(preferred.global_position) < missile_range and terrain.line_of_sight(eye, preferred.global_position):
 					desired = preferred
 		if desired == null:
@@ -373,3 +373,16 @@ func weapon_labels() -> Dictionary:
 	if missiles_primary:
 		return {"fire": "ПУСК", "secondary": "ПУЛЕМЁТ" if guns != null else ""}
 	return {"fire": "ОГОНЬ", "secondary": "ЗУР" if missiles != null else ""}
+
+
+func net_aim() -> Variant:
+	return _turret_aim_point()
+
+
+func _puppet_visuals(delta: float) -> void:
+	super._puppet_visuals(delta)
+	for r: Dictionary in _radars:
+		var n: Node3D = r["node"]
+		if is_instance_valid(n):
+			n.rotate_y(delta * float(r.get("speed", 2.0)))
+	_update_launcher(delta)

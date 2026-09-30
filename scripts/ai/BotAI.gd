@@ -222,7 +222,7 @@ func _valid(t: Variant) -> bool:
 
 ## На лёгких уровнях игрок реже становится приоритетной целью.
 func _focus(v: Vehicle) -> float:
-	if v.is_player:
+	if v.is_human:
 		return 1.0 / maxf(float(difficulty.get("player_focus", 1.0)), 0.2)
 	return 1.0
 
@@ -231,7 +231,7 @@ func _pick_target(max_range: float, mode: String) -> Vehicle:
 	var pos := vehicle.global_position + Vector3.UP * 3.0
 	var best: Vehicle = null
 	var best_score := INF
-	for v in GlobalBattleManager.enemies_in_radius(vehicle.team, pos, max_range):
+	for v in GlobalBattleManager.enemies_in_radius(vehicle.team, pos, max_range, -1, vehicle.participant_id):
 		var d := pos.distance_to(v.global_position)
 		var factor := 1.0
 		match mode:
@@ -280,7 +280,7 @@ func _pick_strike_target() -> Node3D:
 	var best: Node3D = null
 	var best_score := INF
 	var reach := 9000.0 * float(difficulty.get("detect", 1.0))
-	for v in GlobalBattleManager.enemies_in_radius(vehicle.team, pos, reach):
+	for v in GlobalBattleManager.enemies_in_radius(vehicle.team, pos, reach, -1, vehicle.participant_id):
 		if v.category == GameDB.Category.AIR:
 			continue
 		var pri := 1.2
@@ -620,7 +620,7 @@ func _pick_special_target(v: Vehicle, r: Vector2, moving_ok: bool) -> Node3D:
 	var pos := v.global_position
 	var best: Node3D = null
 	var best_score := INF
-	for e in GlobalBattleManager.enemies_in_radius(v.team, pos, r.y - 50.0):
+	for e in GlobalBattleManager.enemies_in_radius(v.team, pos, r.y - 50.0, -1, v.participant_id):
 		if e.category == GameDB.Category.AIR:
 			continue
 		var d := GameDB.flat_distance(pos, e.global_position)

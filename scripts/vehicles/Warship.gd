@@ -46,6 +46,7 @@ var _roll: float = 0.0
 var _think: float = 0.0
 var _aa_target: Vehicle = null
 var _missile_threat: Projectile = null
+var _last_aim: Variant = null
 var _aa_index: int = 0
 var _main_index: int = 0
 var _next_tube: int = 0
@@ -157,6 +158,20 @@ func _vehicle_physics(delta: float) -> void:
 		_patrol(delta)
 	else:
 		_steer(delta)
+	_animate_hull(delta)
+
+
+func _puppet_visuals(delta: float) -> void:
+	_animate_hull(delta)
+	_update_main(delta, controls.aim_point if controls.has_aim else null)
+
+
+func net_aim() -> Variant:
+	return _last_aim
+
+
+## Качка и крен корпуса, кильватер, вращение антенн.
+func _animate_hull(delta: float) -> void:
 	_bob_time += delta
 	var speed_k := clampf(absf(speed) / maxf(max_speed_fwd, 1.0), 0.0, 1.0)
 	# Водоизмещающий корпус кренится наружу поворота, мерно качается на волне.
@@ -225,6 +240,7 @@ func _handle_weapons(delta: float) -> void:
 		aim = _auto_gun_aim()
 	elif controls.has_aim:
 		aim = controls.aim_point
+	_last_aim = aim
 	_update_main(delta, aim)
 	var fire_main := controls.fire_primary
 	if autonomous:
@@ -255,7 +271,7 @@ func _select_targets() -> void:
 	var ac: Dictionary = cfg.get("aa", {})
 	var aa_range := float(ac.get("range", 1500.0))
 	var best_d := aa_range
-	for v in GlobalBattleManager.enemies_in_radius(team, global_position, aa_range, GameDB.Category.AIR):
+	for v in GlobalBattleManager.enemies_in_radius(team, global_position, aa_range, GameDB.Category.AIR, participant_id):
 		var d := global_position.distance_to(v.global_position)
 		if d < best_d:
 			best_d = d
@@ -266,7 +282,7 @@ func _select_targets() -> void:
 			if not (p is CruiseMissile or p is BallisticMissile):
 				continue
 			var proj := p as Projectile
-			if proj.team == team:
+			if GlobalBattleManager.are_allies(proj.team, proj.owner_pid(), team, participant_id):
 				continue
 			var dm := global_position.distance_to(proj.global_position)
 			if dm < best_m:
@@ -277,7 +293,7 @@ func _select_targets() -> void:
 		var mc: Dictionary = cfg.get("main", {})
 		var gun_range := float(mc.get("range", 3000.0))
 		best_d = gun_range
-		for v in GlobalBattleManager.enemies_in_radius(team, global_position, gun_range):
+		for v in GlobalBattleManager.enemies_in_radius(team, global_position, gun_range, -1, participant_id):
 			if v.category == GameDB.Category.AIR:
 				continue
 			var d := global_position.distance_to(v.global_position) * (0.7 if v.category == GameDB.Category.NAVAL else 1.0)
@@ -479,7 +495,7 @@ func _update_lock(delta: float) -> void:
 		var desired: Vehicle = null
 		if is_instance_valid(controls.lock_target) and controls.lock_target is Vehicle:
 			var preferred := controls.lock_target as Vehicle
-			if not preferred.is_dead and preferred.category == GameDB.Category.AIR and preferred.team != team and eye.distance_to(preferred.global_position) < radar and terrain.line_of_sight(eye, preferred.global_position):
+			if not preferred.is_dead and preferred.category == GameDB.Category.AIR and not GlobalBattleManager.vehicles_allied(preferred, self) and eye.distance_to(preferred.global_position) < radar and terrain.line_of_sight(eye, preferred.global_position):
 				desired = preferred
 		if desired == null and controls.has_aim:
 			desired = find_target_in_cone((controls.aim_point - eye).normalized(), float(sc.get("cone", 16.0)), radar, "air", Vector3.UP * (_deck + 10.0))
@@ -511,7 +527,7 @@ func _auto_sam(delta: float) -> void:
 	var eye := global_position + Vector3.UP * (_deck + 10.0)
 	var best: Vehicle = null
 	var best_d := radar
-	for v in GlobalBattleManager.enemies_in_radius(team, global_position, radar, GameDB.Category.AIR):
+	for v in GlobalBattleManager.enemies_in_radius(team, global_position, radar, GameDB.Category.AIR, participant_id):
 		var d := eye.distance_to(v.global_position)
 		if d < best_d and d > 400.0 and terrain.line_of_sight(eye, v.global_position):
 			var busy := false

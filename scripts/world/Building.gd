@@ -20,6 +20,8 @@ var footprint_radius: float = 7.0
 var hit_radius: float = 6.0
 var explodes_on_death: bool = false
 var damage_modifiers: Dictionary = {"bullet": 0.15, "flak": 0.2, "missile": 0.7}
+## Сетевой ключ сооружения (одинаков на всех устройствах: вид и координаты на карте).
+var net_key: int = 0
 
 var _model: Node3D = null
 var _spin: Node3D = null
@@ -83,14 +85,26 @@ func apply_damage(amount: float, damage_type: String, source: Dictionary) -> voi
 	if is_dead or amount <= 0.0:
 		return
 	var src_team := int(source.get("team", -1))
-	if team >= 0 and src_team == team:
+	if team >= 0 and not GlobalBattleManager.ffa and src_team == team:
+		return
+	if Net.is_client():
+		Net.forward_damage(self, amount, damage_type, source)
 		return
 	var dmg := amount * float(damage_modifiers.get(damage_type, 1.0))
 	health -= dmg
 	GlobalBattleManager.report_damage(self, dmg, source)
 	_update_damage_fx()
+	Net.mark_structure_dirty(self)
 	if health <= 0.0:
 		_destroy(source)
+
+
+## ХП от хоста (клиент сетевой игры).
+func net_set_health(hp: float) -> void:
+	if is_dead or hp >= health:
+		return
+	health = hp
+	_update_damage_fx()
 
 
 func _update_damage_fx() -> void:
@@ -107,12 +121,27 @@ func _update_damage_fx() -> void:
 
 
 func _destroy(killer: Dictionary) -> void:
+	_destroy_visual(killer, true)
+	GlobalBattleManager.report_structure_destroyed(self, killer)
+	Net.on_structure_destroyed(self, killer)
+
+
+## Разрушение по сообщению хоста (клиент): руины и эффекты, взрыв топлива — без урона.
+func net_destroy(killer: Dictionary) -> void:
+	if is_dead:
+		return
+	_destroy_visual(killer, false)
+
+
+func _destroy_visual(killer: Dictionary, with_damage: bool) -> void:
 	is_dead = true
 	health = 0.0
 	collision_layer = 0
 	var center := global_position + Vector3(0.0, size.y * 0.4, 0.0)
-	if explodes_on_death:
+	if explodes_on_death and with_damage:
 		Explosion.spawn(center, 32.0, 160.0, "explosive", -1, killer, 1.0, false)
+	elif explodes_on_death:
+		Effects.explosion(center, 32.0, false)
 	else:
 		Effects.explosion(center, clampf(footprint_radius, 8.0, 26.0), kind == "oil_rig")
 	if _model != null:
@@ -132,4 +161,3 @@ func _destroy(killer: Dictionary) -> void:
 			fire_ref.queue_free()
 	)
 	destroyed.emit(self, killer)
-	GlobalBattleManager.report_structure_destroyed(self, killer)

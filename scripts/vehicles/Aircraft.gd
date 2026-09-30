@@ -664,12 +664,35 @@ func _spawn_flare() -> void:
 	f.velocity = velocity * 0.55 - global_basis.y * 18.0 + global_basis.x * _rng.randf_range(-16.0, 16.0)
 	f.position = global_position + global_basis.z * 5.0
 	parent.add_child(f)
+	var decoy := _decoy_pending
 	if _decoy_pending:
 		_decoy_pending = false
-		for m in incoming_missiles.duplicate():
-			if is_instance_valid(m) and m.has_method("consider_decoy"):
-				m.call("consider_decoy", f)
+		net_flare_decoy(f)
+	Net.send_flare(self, f.position, f.velocity, decoy)
 	SoundFX.play_3d("flare", global_position, -6.0, 1.0, 20.0)
+
+
+## Ловушка отводит ракеты, наводящиеся на этот самолёт (в сети — только ракеты этого устройства).
+func net_flare_decoy(f: Node3D) -> void:
+	for m in incoming_missiles.duplicate():
+		if is_instance_valid(m) and m.has_method("consider_decoy") and not bool(m.get("net_visual")):
+			m.call("consider_decoy", f)
+
+
+func net_extra() -> float:
+	return clampf(throttle, 0.0, 1.0)
+
+
+func net_apply_extra(value: float) -> void:
+	throttle = clampf(value, 0.0, 1.0)
+
+
+func _puppet_visuals(delta: float) -> void:
+	_update_engine_visuals(delta, 0.0)
+	_flash_timer -= delta
+	for f in _flashes:
+		if f.visible and _flash_timer <= 0.0:
+			f.visible = false
 
 
 func _create_trails() -> void:

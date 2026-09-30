@@ -123,6 +123,29 @@ jobs:
           fi
           grep -h "stat spawned_" unit-*.log | sort | uniq -c
 
+      - name: Автотест — сетевая игра, хост + клиент по UDP (headless)
+        run: |
+          set -o pipefail
+          for mode in teams ffa; do
+            flag="--net-host"
+            [ "$mode" = "ffa" ] && flag="--net-host=ffa"
+            ~/godot-bin/godot --headless --path . -- --smoke-test --smoke-seconds=40 --smoke-era=2 --smoke-map=strait $flag --net-wait=8 --quality=0 > net-host-$mode.log 2>&1 &
+            host=$!
+            sleep 3
+            ~/godot-bin/godot --headless --path . -- --smoke-test --smoke-seconds=35 --smoke-era=2 --smoke-vehicle=pantsir --net-join=127.0.0.1:24680 --quality=0 2>&1 | tee net-client-$mode.log
+            wait $host || true
+            cat net-host-$mode.log
+            if ! grep -q "client: подключён" net-client-$mode.log; then
+              echo "::error::Клиент не подключился к хосту ($mode)"
+              exit 1
+            fi
+          done
+          if grep -q "SCRIPT ERROR" net-*.log; then
+            echo "::error::Ошибки скриптов в сетевой игре"
+            exit 1
+          fi
+          grep -h "\[NET\] \(host\|client\) units" net-*.log
+
       - name: Экспорт Windows (.exe)
         run: |
           mkdir -p build/windows

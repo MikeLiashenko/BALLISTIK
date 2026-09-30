@@ -51,6 +51,21 @@ var _roster: RichTextLabel = null
 var _selected_label: Label = null
 var _start_button: Button = null
 var _size_option: OptionButton = null
+var _era_option: OptionButton = null
+var _diff_option: OptionButton = null
+var _score_option: OptionButton = null
+var _time_option: OptionButton = null
+var _lobby_title: Label = null
+var _lobby_code: Label = null
+var _code_copy: Button = null
+var _side_hint: Label = null
+var _back_button: Button = null
+# Выбор режима и сетевая игра
+var _modes: Control = null
+var _mode_status: Label = null
+var _mode_buttons: Array[Button] = []
+var _name_edit: LineEdit = null
+var _code_edit: LineEdit = null
 var _thumb_thread: Thread = null
 # Ангар
 var _hangar_viewer: ModelViewer = null
@@ -72,6 +87,7 @@ func _ready() -> void:
 	_build_background()
 	_build_main()
 	_build_lobby()
+	_build_modes()
 	_build_hangar()
 	_settings_panel = SettingsPanel.new()
 	_settings_panel.visible = false
@@ -82,8 +98,23 @@ func _ready() -> void:
 	MusicPlayer.play_menu()
 	_on_track_changed(MusicPlayer.current_title)
 	_show_main()
+	Net.status.connect(_on_net_status)
+	Net.failed.connect(_on_net_failed)
+	Net.session_ready.connect(_on_net_session)
+	Net.lobby_changed.connect(_refresh_lobby)
+	Net.closed.connect(_on_net_closed)
+	if Net.active():
+		_show_net_lobby()
+	elif Net.last_message != "":
+		_show_modes()
+		_set_mode_status(Net.last_message, true)
+		Net.last_message = ""
 	_start_thumbnails()
-	if GlobalBattleManager.smoke_test:
+	if Net.cli_host or Net.cli_join != "" or Net.cli_find != "":
+		if not Net.cli_started:
+			Net.cli_started = true
+			Net.start_cli_test()
+	elif GlobalBattleManager.smoke_test:
 		if GlobalBattleManager.smoke_menu:
 			_run_menu_tour()
 		else:
@@ -161,7 +192,7 @@ func _build_main() -> void:
 	sep.custom_minimum_size = Vector2(540.0, 2.0)
 	left.add_child(sep)
 	var battle := UITheme.menu_button("В БОЙ", true, Vector2(380.0, 64.0))
-	battle.pressed.connect(_show_lobby)
+	battle.pressed.connect(_show_modes)
 	left.add_child(battle)
 	var hangar := UITheme.menu_button("АНГАР")
 	hangar.pressed.connect(_show_hangar)
@@ -232,11 +263,24 @@ func _build_lobby() -> void:
 	var header := HBoxContainer.new()
 	header.add_theme_constant_override("separation", 10)
 	root.add_child(header)
-	var title := UITheme.make_label("ПОДГОТОВКА К БОЮ", 28, UITheme.NEON)
-	UITheme.glow_label(title, UITheme.NEON, 2, 10)
-	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	header.add_child(title)
-	header.add_child(_header_hint("СТОРОНА:"))
+	_lobby_title = UITheme.make_label("ПОДГОТОВКА К БОЮ", 26, UITheme.NEON)
+	UITheme.glow_label(_lobby_title, UITheme.NEON, 2, 10)
+	_lobby_title.clip_text = true
+	_lobby_title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	_lobby_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	header.add_child(_lobby_title)
+	_lobby_code = _header_hint("")
+	_lobby_code.add_theme_font_size_override("font_size", 20)
+	_lobby_code.add_theme_color_override("font_color", UITheme.ACCENT)
+	header.add_child(_lobby_code)
+	_code_copy = UITheme.make_button("КОПИРОВАТЬ", Vector2(140.0, 42.0), 15)
+	_code_copy.pressed.connect(func() -> void:
+		DisplayServer.clipboard_set(str(Net.session.get("code", "")))
+		SoundFX.play_ui("ui_confirm", -8.0)
+	)
+	header.add_child(_code_copy)
+	_side_hint = _header_hint("СТОРОНА:")
+	header.add_child(_side_hint)
 	var group := ButtonGroup.new()
 	for team in 2:
 		var b := UITheme.make_button(GameDB.team_name(team), Vector2(140.0, 42.0), 17)
@@ -266,9 +310,9 @@ func _build_lobby() -> void:
 	var bottom := HBoxContainer.new()
 	bottom.add_theme_constant_override("separation", 14)
 	root.add_child(bottom)
-	var back := UITheme.make_button("НАЗАД", Vector2(170.0, 54.0), 19)
-	back.pressed.connect(_show_main)
-	bottom.add_child(back)
+	_back_button = UITheme.make_button("НАЗАД", Vector2(170.0, 54.0), 19)
+	_back_button.pressed.connect(_on_lobby_back)
+	bottom.add_child(_back_button)
 	_selected_label = UITheme.make_label("", 16, UITheme.TEXT)
 	_selected_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_selected_label.clip_text = true
@@ -355,14 +399,14 @@ func _build_lobby_left() -> Control:
 		_map_thumbs[map_id] = thumb
 	box.add_child(UITheme.separator())
 	box.add_child(UITheme.section_title("ПАРАМЕТРЫ БОЯ"))
-	_add_option(box, "Эпоха", GameDB.ERA_NAMES, GameSettings.air_era, _on_era)
-	_add_option(box, "Боты", _difficulty_names(), GameSettings.difficulty, _on_difficulty)
+	_era_option = _add_option(box, "Эпоха", GameDB.ERA_NAMES, GameSettings.air_era, _on_era)
+	_diff_option = _add_option(box, "Боты", _difficulty_names(), GameSettings.difficulty, _on_difficulty)
 	var sizes: Array = []
 	for n in range(3, 17):
 		sizes.append("%d на %d" % [n, n])
 	_size_option = _add_option(box, "Размер команд", sizes, GameSettings.team_size - 3, _on_team_size)
-	_add_option(box, "Лимит очков", ["500", "1000", "2000"], maxi([500, 1000, 2000].find(GameSettings.score_limit), 0), _on_score_limit)
-	_add_option(box, "Время", ["10 мин", "15 мин", "20 мин", "30 мин"], maxi([10, 15, 20, 30].find(GameSettings.time_limit_min), 0), _on_time_limit)
+	_score_option = _add_option(box, "Лимит очков", ["500", "1000", "2000"], maxi([500, 1000, 2000].find(GameSettings.score_limit), 0), _on_score_limit)
+	_time_option = _add_option(box, "Время", ["10 мин", "15 мин", "20 мин", "30 мин"], maxi([10, 15, 20, 30].find(GameSettings.time_limit_min), 0), _on_time_limit)
 	return panel
 
 
@@ -634,7 +678,7 @@ func _build_loading() -> void:
 
 # --- Переходы между экранами ------------------------------------------------------------------------------
 func _show_only(screen: Control) -> void:
-	for s: Control in [_main, _lobby, _hangar, _settings_panel]:
+	for s: Control in [_main, _modes, _lobby, _hangar, _settings_panel]:
 		s.visible = s == screen
 
 
@@ -653,13 +697,23 @@ func _show_hangar() -> void:
 		_show_hangar_vehicle(str(_hangar.get_meta("first", "bf109")))
 
 
+## Офлайн-тренировка с ботами (режим — GlobalBattleManager.ffa).
 func _show_lobby() -> void:
+	if Net.active():
+		Net.leave()
 	GlobalBattleManager.prepare_lobby()
 	_show_only(_lobby)
 	_rebuild_selector()
 	var sel := GameSettings.map_id
 	if _map_buttons.has(sel):
 		(_map_buttons[sel] as Button).set_pressed_no_signal(true)
+
+
+## Лобби сетевой сессии (состав и параметры — от хоста).
+func _show_net_lobby() -> void:
+	_set_mode_busy(false)
+	_show_only(_lobby)
+	_rebuild_selector()
 
 
 func _rebuild_selector() -> void:
@@ -673,19 +727,58 @@ func _refresh_lobby() -> void:
 	if _lobby == null or not _lobby.visible:
 		return
 	var gbm := GlobalBattleManager
-	var t := ""
-	for team in 2:
-		var hex := GameDB.team_color(team).to_html(false)
-		var mine := " (вы)" if team == gbm.player_team else ""
-		t += "[color=#%s][b]%s%s[/b][/color]\n" % [hex, GameDB.team_name(team), mine]
-		for p in gbm.get_team_participants(team):
-			var who := "[color=#ffb020]Вы[/color]" if p.is_player else p.name
-			var label := p.get_vehicle_label() if p.vehicle_type != "" else "[color=#667]—[/color]"
-			t += "  %s — %s\n" % [who, label]
-	_roster.text = t
+	if Net.active() and gbm.player != null and _slot_selector.team != gbm.player_team:
+		_rebuild_selector()
+		return
+	var online := Net.active()
+	var host := Net.is_host()
+	var editable := not online or (host and not Net.is_public() and str(Net.session.get("state", "")) == "lobby")
+	var mode_name := "КАЖДЫЙ САМ ЗА СЕБЯ" if gbm.ffa else "КОМАНДНЫЙ БОЙ"
+	if online:
+		_lobby_title.text = "%s · %s" % ["ОНЛАЙН-БОЙ" if Net.is_public() else "КОМНАТА", mode_name]
+		_code_copy.visible = not Net.is_public() and str(Net.session.get("code", "")) != ""
+	else:
+		_lobby_title.text = "ТРЕНИРОВКА · %s" % mode_name
+		_lobby_code.text = ""
+		_code_copy.visible = false
+	_update_lobby_code()
+	_side_hint.visible = not gbm.ffa
+	for b in _team_buttons:
+		b.visible = not gbm.ffa
+	for o: OptionButton in [_era_option, _diff_option, _size_option, _score_option, _time_option]:
+		o.disabled = not editable
+	for map_id: String in _map_buttons.keys():
+		(_map_buttons[map_id] as Button).disabled = not editable
+	if online:
+		var s := Net.session
+		_era_option.select(clampi(int(s.get("era", 0)), 0, _era_option.item_count - 1))
+		_diff_option.select(clampi(int(s.get("difficulty", 1)), 0, _diff_option.item_count - 1))
+		_size_option.select(clampi(gbm.team_size - 3, 0, _size_option.item_count - 1))
+		_score_option.select(maxi([500, 1000, 2000].find(int(s.get("score_limit", 1000))), 0))
+		_time_option.select(maxi([10, 15, 20, 30].find(int(s.get("time_min", 15))), 0))
+		var m := str(s.get("map", MapPresets.RANDOM_ID))
+		if _map_buttons.has(m):
+			(_map_buttons[m] as Button).set_pressed_no_signal(true)
+	for i in _size_option.item_count:
+		var n := i + 3
+		_size_option.set_item_text(i, "%d участников" % (n * 2) if gbm.ffa else "%d на %d" % [n, n])
+	var limits := [500, 1000, 2000]
+	for i in _score_option.item_count:
+		var lim: int = limits[i]
+		_score_option.set_item_text(i, "%d (личный)" % maxi(int(round(lim * 0.3 / 10.0)) * 10, 50) if gbm.ffa else str(lim))
+	_roster.text = _roster_text()
 	var chosen := gbm.player.vehicle_type if gbm.player != null else ""
-	_start_button.disabled = chosen == ""
-	var map_text := MapPresets.map_name(GameSettings.map_id)
+	_back_button.text = "ПОКИНУТЬ" if online else "НАЗАД"
+	if online and not host:
+		_start_button.disabled = true
+		_start_button.text = "БОЙ ИДЁТ…" if str(Net.session.get("state", "")) == "battle" else "ЖДЁМ ХОСТА"
+	elif host:
+		_start_button.disabled = str(Net.session.get("state", "")) != "lobby"
+		_start_button.text = "НАЧАТЬ СЕЙЧАС" if Net.is_public() else "НАЧАТЬ БОЙ"
+	else:
+		_start_button.disabled = chosen == ""
+		_start_button.text = "НАЧАТЬ БОЙ"
+	var map_text := MapPresets.map_name(str(Net.session.get("map", GameSettings.map_id)) if online else GameSettings.map_id)
 	if chosen == "":
 		_selected_label.text = "Карта: %s · выберите технику." % map_text
 		if _preview.current_type == "":
@@ -698,6 +791,49 @@ func _refresh_lobby() -> void:
 		_selected_label.tooltip_text = _selected_label.text
 		_on_vehicle_hovered(chosen)
 	_slot_selector.refresh()
+
+
+func _update_lobby_code() -> void:
+	if not Net.active():
+		return
+	if Net.is_public():
+		var st := str(Net.session.get("state", ""))
+		if st == "lobby":
+			_lobby_code.text = "СТАРТ ЧЕРЕЗ %d С · ИГРОКОВ %d" % [ceili(Net.countdown), GlobalBattleManager.human_count()]
+		else:
+			_lobby_code.text = "ИДЁТ БОЙ"
+	else:
+		var code := str(Net.session.get("code", ""))
+		_lobby_code.text = "КОД:  %s" % code if code != "" else "КОД: создаётся…"
+	if Net.via_relay:
+		_lobby_code.text += "  · ЧЕРЕЗ СЕРВЕР"
+
+
+func _roster_text() -> String:
+	var gbm := GlobalBattleManager
+	var online := Net.active()
+	var t := ""
+	var groups: Array = [[-1]] if gbm.ffa else [[0], [1]]
+	for g: Array in groups:
+		var team: int = g[0]
+		if team < 0:
+			t += "[color=#%s][b]ВСЕ ПРОТИВ ВСЕХ[/b][/color]\n" % UITheme.NEON.to_html(false)
+		else:
+			var mine := " (вы)" if team == gbm.player_team else ""
+			t += "[color=#%s][b]%s%s[/b][/color]\n" % [GameDB.team_color(team).to_html(false), GameDB.team_name(team), mine]
+		for p in gbm.participants:
+			if team >= 0 and p.team != team:
+				continue
+			var who := p.name
+			if p.is_player:
+				who = "[color=#ffb020]%s[/color]" % ("Вы" if not online else p.name + " (вы)")
+			elif p.is_human:
+				who = "[color=#7fe0ff]%s ★%s[/color]" % [p.name, " (хост)" if p.peer_id == 1 else ""]
+			var label := p.get_vehicle_label() if p.vehicle_type != "" else "[color=#667]—[/color]"
+			t += "  %s — %s\n" % [who, label]
+	if online:
+		t += "\n[color=#8aa]★ — живые игроки, остальные — боты.[/color]"
+	return t
 
 
 func _on_vehicle_hovered(type_id: String) -> void:
@@ -730,45 +866,80 @@ func _on_team_selected(team: int) -> void:
 
 
 func _on_map_selected(map_id: String) -> void:
+	if Net.is_client():
+		return
 	GameSettings.map_id = map_id
 	GameSettings.save_settings()
 	GlobalBattleManager.map_choice = map_id
+	if Net.is_host():
+		Net.set_session_value("map", map_id)
 	_refresh_lobby()
 
 
 func _on_era(index: int) -> void:
+	if Net.is_client():
+		return
 	GameSettings.air_era = index
 	GameSettings.save_settings()
-	GlobalBattleManager.prepare_lobby()
+	if Net.is_host():
+		Net.set_session_value("era", index)
+	else:
+		GlobalBattleManager.prepare_lobby()
 	_rebuild_selector()
 
 
 func _on_difficulty(index: int) -> void:
+	if Net.is_client():
+		return
 	GameSettings.difficulty = index
 	GameSettings.save_settings()
 	GlobalBattleManager.difficulty = index
+	if Net.is_host():
+		Net.set_session_value("difficulty", index)
 
 
 func _on_team_size(index: int) -> void:
+	if Net.is_client():
+		return
 	GameSettings.team_size = index + 3
 	GameSettings.save_settings()
-	GlobalBattleManager.prepare_lobby()
+	if Net.is_host():
+		Net.set_session_value("team_size", index + 3)
+	else:
+		GlobalBattleManager.prepare_lobby()
 	_rebuild_selector()
 
 
 func _on_score_limit(index: int) -> void:
+	if Net.is_client():
+		return
 	GameSettings.score_limit = [500, 1000, 2000][index]
 	GameSettings.save_settings()
 	GlobalBattleManager.score_limit = GameSettings.score_limit
+	if Net.is_host():
+		Net.set_session_value("score_limit", GameSettings.score_limit)
 
 
 func _on_time_limit(index: int) -> void:
+	if Net.is_client():
+		return
 	GameSettings.time_limit_min = [10, 15, 20, 30][index]
 	GameSettings.save_settings()
 	GlobalBattleManager.time_limit = float(GameSettings.time_limit_min) * 60.0
+	if Net.is_host():
+		Net.set_session_value("time_min", GameSettings.time_limit_min)
 
 
 func _on_start() -> void:
+	if Net.is_client():
+		return
+	if Net.is_host():
+		_loading.visible = true
+		SoundFX.play_ui("ui_confirm", -4.0)
+		await get_tree().process_frame
+		await get_tree().process_frame
+		Net.start_match()
+		return
 	if GlobalBattleManager.player == null or GlobalBattleManager.player.vehicle_type == "":
 		return
 	_loading.visible = true
@@ -776,6 +947,203 @@ func _on_start() -> void:
 	await get_tree().process_frame
 	await get_tree().process_frame
 	GlobalBattleManager.start_battle()
+
+
+func _on_lobby_back() -> void:
+	if Net.active():
+		Net.leave()
+	_show_modes()
+
+
+# --- Выбор режима: тренировка, онлайн-бой, комнаты ------------------------------------------------------------
+func _build_modes() -> void:
+	_modes = MarginContainer.new()
+	_modes.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	for side_name: String in ["margin_left", "margin_right", "margin_top", "margin_bottom"]:
+		_modes.add_theme_constant_override(side_name, 18)
+	add_child(_modes)
+	var root := VBoxContainer.new()
+	root.add_theme_constant_override("separation", 12)
+	_modes.add_child(root)
+	var header := HBoxContainer.new()
+	header.add_theme_constant_override("separation", 10)
+	root.add_child(header)
+	var title := UITheme.make_label("РЕЖИМ БОЯ", 28, UITheme.NEON)
+	UITheme.glow_label(title, UITheme.NEON, 2, 10)
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	header.add_child(title)
+	header.add_child(_header_hint("ПОЗЫВНОЙ:"))
+	_name_edit = LineEdit.new()
+	_name_edit.custom_minimum_size = Vector2(230.0, 42.0)
+	_name_edit.max_length = 18
+	_name_edit.text = GameSettings.player_name
+	_name_edit.add_theme_font_size_override("font_size", 17)
+	_name_edit.text_changed.connect(func(t: String) -> void:
+		GameSettings.player_name = t
+	)
+	_name_edit.focus_exited.connect(func() -> void:
+		GameSettings.save_settings()
+		_name_edit.text = GameSettings.player_name
+	)
+	header.add_child(_name_edit)
+	var body := HBoxContainer.new()
+	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	body.add_theme_constant_override("separation", 12)
+	root.add_child(body)
+	# Тренировка
+	var training := _mode_card(body, "ТРЕНИРОВКА С БОТАМИ", "Бой против ИИ без сети. Карта, эпоха, сложность ботов и размер сторон настраиваются в лобби.")
+	_mode_button(training, "КОМАНДНЫЙ БОЙ", "Две команды, общий счёт до лимита очков", func() -> void: _on_training(false))
+	_mode_button(training, "КАЖДЫЙ САМ ЗА СЕБЯ", "Все против всех, победа — по личным очкам", func() -> void: _on_training(true))
+	# Онлайн-бой
+	var online := _mode_card(body, "ОНЛАЙН-БОЙ", "Быстрый поиск боя с живыми игроками: подключение к открытому бою или новый бой, который ждёт соперников %d с. Свободные места занимают боты, можно войти в идущий бой." % int(Net.PUBLIC_WAIT))
+	_add_option(online, "Эпоха", GameDB.ERA_NAMES, GameSettings.online_era, func(i: int) -> void:
+		GameSettings.online_era = i
+		GameSettings.save_settings()
+	)
+	_mode_button(online, "В БОЙ: КОМАНДЫ", "Командный бой с живыми игроками", func() -> void: _on_online(false))
+	_mode_button(online, "В БОЙ: КАЖДЫЙ САМ ЗА СЕБЯ", "Все против всех с живыми игроками", func() -> void: _on_online(true))
+	# Комнаты
+	var rooms := _mode_card(body, "КОМНАТЫ", "Создайте комнату и отправьте код друзьям. Хост выбирает карту и правила и сам начинает бой.")
+	_mode_button(rooms, "СОЗДАТЬ: КОМАНДЫ", "Комната с командным боем", func() -> void: _on_create_room(false))
+	_mode_button(rooms, "СОЗДАТЬ: КАЖДЫЙ САМ ЗА СЕБЯ", "Комната «все против всех»", func() -> void: _on_create_room(true))
+	rooms.add_child(UITheme.separator())
+	rooms.add_child(UITheme.section_title("ВХОД ПО КОДУ", 13))
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	rooms.add_child(row)
+	_code_edit = LineEdit.new()
+	_code_edit.placeholder_text = "КОД"
+	_code_edit.max_length = 21
+	_code_edit.custom_minimum_size = Vector2(0.0, 48.0)
+	_code_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_code_edit.add_theme_font_size_override("font_size", 20)
+	_code_edit.text_submitted.connect(func(_t: String) -> void: _on_join_code())
+	row.add_child(_code_edit)
+	var join := UITheme.make_button("ВОЙТИ", Vector2(120.0, 48.0), 18)
+	join.pressed.connect(_on_join_code)
+	row.add_child(join)
+	_mode_buttons.append(join)
+	var bottom := HBoxContainer.new()
+	bottom.add_theme_constant_override("separation", 14)
+	root.add_child(bottom)
+	var back := UITheme.make_button("НАЗАД", Vector2(170.0, 54.0), 19)
+	back.pressed.connect(func() -> void:
+		if Net.active():
+			Net.leave()
+		_show_main()
+	)
+	bottom.add_child(back)
+	_mode_status = UITheme.make_label("", 16, UITheme.TEXT)
+	_mode_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_mode_status.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_mode_status.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	bottom.add_child(_mode_status)
+
+
+func _mode_card(parent: Control, title: String, desc: String) -> VBoxContainer:
+	var panel := PanelContainer.new()
+	panel.add_theme_stylebox_override("panel", UITheme.glass_panel())
+	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	parent.add_child(panel)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 10)
+	panel.add_child(box)
+	var t := UITheme.make_label(title, 22, UITheme.NEON)
+	UITheme.glow_label(t, UITheme.NEON, 2, 8)
+	box.add_child(t)
+	var d := UITheme.make_label(desc, 14, UITheme.TEXT_DIM)
+	d.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	d.custom_minimum_size = Vector2(300.0, 0.0)
+	box.add_child(d)
+	var spacer := Control.new()
+	spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	box.add_child(spacer)
+	return box
+
+
+func _mode_button(box: Control, text: String, tip: String, callback: Callable) -> void:
+	var b := UITheme.make_button(text, Vector2(0.0, 54.0), 17)
+	b.tooltip_text = tip
+	b.clip_text = true
+	b.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	b.pressed.connect(callback)
+	box.add_child(b)
+	_mode_buttons.append(b)
+
+
+func _show_modes() -> void:
+	_show_only(_modes)
+	_name_edit.text = GameSettings.player_name
+	_set_mode_busy(Net.busy)
+
+
+func _set_mode_status(text: String, error: bool = false) -> void:
+	if _mode_status == null:
+		return
+	_mode_status.text = text
+	_mode_status.add_theme_color_override("font_color", UITheme.DANGER if error else UITheme.TEXT)
+
+
+func _set_mode_busy(on: bool) -> void:
+	for b in _mode_buttons:
+		b.disabled = on
+	if not on and _mode_status != null and not Net.busy:
+		_mode_status.modulate.a = 1.0
+
+
+func _commit_name() -> void:
+	GameSettings.player_name = _name_edit.text
+	GameSettings.save_settings()
+	_name_edit.text = GameSettings.player_name
+
+
+func _on_training(ffa: bool) -> void:
+	GlobalBattleManager.ffa = ffa
+	_show_lobby()
+
+
+func _on_online(ffa: bool) -> void:
+	_commit_name()
+	_set_mode_busy(true)
+	_set_mode_status("Поиск боя…")
+	Net.find_match(ffa, GameSettings.online_era)
+
+
+func _on_create_room(ffa: bool) -> void:
+	_commit_name()
+	_set_mode_status("Создаём комнату…")
+	Net.host_session(Net.default_session("room", ffa, GameSettings.air_era))
+
+
+func _on_join_code() -> void:
+	if _code_edit.text.strip_edges() == "":
+		_set_mode_status("Введите код комнаты", true)
+		return
+	_commit_name()
+	_set_mode_busy(true)
+	Net.join_code(_code_edit.text)
+
+
+func _on_net_status(text: String) -> void:
+	_set_mode_status(text)
+
+
+func _on_net_failed(reason: String) -> void:
+	_set_mode_busy(false)
+	if not _modes.visible:
+		_show_modes()
+	_set_mode_status(reason, true)
+
+
+func _on_net_session() -> void:
+	_set_mode_status("")
+	_show_net_lobby()
+
+
+func _on_net_closed(reason: String) -> void:
+	_show_modes()
+	_set_mode_status(reason, true)
 
 
 # --- Превью карт (фоновый поток) -----------------------------------------------------------------------------
@@ -836,11 +1204,18 @@ func _process(delta: float) -> void:
 		_map_info.text = "%s\n%s" % [str(preset.get("name", "")), str(preset.get("subtitle", ""))]
 	if _settings_panel != null and _settings_panel.visible:
 		_settings_panel.position = ((size - _settings_panel.size) * 0.5).max(Vector2.ZERO)
+	if _lobby != null and _lobby.visible and Net.is_public():
+		_update_lobby_code()
 
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("pause"):
-		if _lobby.visible or _settings_panel.visible or _hangar.visible:
+		if _lobby.visible:
+			_on_lobby_back()
+			get_viewport().set_input_as_handled()
+		elif _modes.visible or _settings_panel.visible or _hangar.visible:
+			if _modes.visible and Net.busy:
+				return
 			_show_main()
 			get_viewport().set_input_as_handled()
 
@@ -850,6 +1225,22 @@ func _unhandled_input(event: InputEvent) -> void:
 func _run_menu_tour() -> void:
 	await get_tree().create_timer(3.0).timeout
 	GlobalBattleManager.save_screenshot()
+	_show_modes()
+	_set_mode_status("Поиск боя…")
+	await get_tree().create_timer(1.0).timeout
+	GlobalBattleManager.save_screenshot()
+	# Сетевое лобби комнаты (без публикации в каталоге) и офлайн-лобби «каждый сам за себя».
+	var s := Net.default_session("room", false, 0)
+	s["code"] = "K7F2Q"
+	Net.host_session(s, false)
+	await get_tree().create_timer(1.5).timeout
+	GlobalBattleManager.save_screenshot()
+	Net.leave()
+	GlobalBattleManager.ffa = true
+	_show_lobby()
+	await get_tree().create_timer(1.5).timeout
+	GlobalBattleManager.save_screenshot()
+	GlobalBattleManager.ffa = false
 	_show_lobby()
 	await get_tree().create_timer(4.5).timeout
 	GlobalBattleManager.save_screenshot()
