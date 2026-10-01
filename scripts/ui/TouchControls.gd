@@ -37,6 +37,8 @@ func configure(p_category: int, vehicle: Vehicle) -> void:
 	category = p_category
 	_buttons.clear()
 	_add_button("pause", "II", Vector2(0.0, 0.0), 30.0, "tl", Vector2(52.0, 52.0))
+	if not tactical:
+		_add_button("view", "ВИД", Vector2.ZERO, 30.0, "tl", Vector2(122.0, 52.0))
 	if tactical:
 		_add_button("launch", "ПУСК", Vector2.ZERO, 62.0, "br", Vector2(125.0, 135.0))
 		_add_button("cancel", "ОТМЕНА", Vector2.ZERO, 46.0, "br", Vector2(270.0, 95.0))
@@ -192,6 +194,9 @@ func _on_button_pressed(id: String) -> void:
 		"special":
 			if controller != null:
 				controller.enter_tactical()
+		"view":
+			if controller != null:
+				controller.toggle_first_person()
 		"launch":
 			if controller != null:
 				controller.tactical_launch()

@@ -37,6 +37,9 @@ var gun_target: Vehicle = null
 var ccip_point: Vector3 = Vector3.ZERO
 var ccip_valid: bool = false
 var designated_target: Node3D = null
+## Фактическое отклонение ручки (тангаж, крен) — для анимации кабины.
+var stick_input: Vector2 = Vector2.ZERO
+var cockpit: Cockpit = null
 
 var _drag_k: float = 0.0
 var _vel_dir: Vector3 = Vector3.FORWARD
@@ -185,6 +188,7 @@ func _vehicle_physics(delta: float) -> void:
 		if absf(yaw_in) < 0.05:
 			yaw_in = ap.z
 	throttle = move_toward(throttle, clampf(c.throttle, 0.0, 1.0), delta * 0.9)
+	stick_input = stick_input.lerp(Vector2(pitch_in, roll_in), clampf(delta * 10.0, 0.0, 1.0))
 	var lift := clampf((speed - min_speed * 0.55) / (min_speed * 0.45), 0.0, 1.0)
 	stall_warning = lift < 0.95
 	var eff := clampf(speed / cruise_speed, 0.3, 1.2)
@@ -762,3 +766,31 @@ func special_ready() -> bool:
 
 func camera_look_ahead() -> float:
 	return 80.0
+
+
+# --- Вид от первого лица ---------------------------------------------------------------------------------
+## Точка глаз пилота в координатах самолёта.
+func first_person_eye() -> Vector3:
+	if cockpit != null:
+		return cockpit.eye
+	var spec := AircraftSpecs.get_spec(vehicle_type)
+	var pilot: Array = (spec.get("canopy", {}) as Dictionary).get("pilot", [3.5, 0.7])
+	return Vector3(0.0, float(pilot[1]) + 0.13, float(pilot[0]) - float(spec.get("cg", 3.0)) - 0.03)
+
+
+## Показать/скрыть кабину (строится при первом включении вида из кабины).
+func set_cockpit_visible(on: bool) -> void:
+	if on and cockpit == null:
+		cockpit = Cockpit.new()
+		cockpit.setup(self)
+		add_child(cockpit)
+	if cockpit != null:
+		cockpit.visible = on
+	# Из кабины диск винта — лёгкая дымка.
+	for d in _prop_discs:
+		if d is GeometryInstance3D:
+			(d as GeometryInstance3D).transparency = 0.8 if on else 0.0
+
+
+func first_person_point() -> Vector3:
+	return get_global_transform_interpolated() * first_person_eye()

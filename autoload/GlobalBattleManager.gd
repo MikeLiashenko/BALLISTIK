@@ -69,6 +69,8 @@ var smoke_human: bool = false
 var smoke_map: String = ""
 ## Автотест меню: обход экранов (главный, лобби, ангар) со скриншотами вместо боя.
 var smoke_menu: bool = false
+## Автотест: камера от первого лица (кабина, прицел наводчика, мостик).
+var smoke_fp: bool = false
 var _smoke_battle_time: float = 0.0
 var _smoke_tactical_stage: int = 0
 var _smoke_elapsed: float = 0.0
@@ -107,6 +109,8 @@ func _parse_cmdline() -> void:
 			air_era = clampi(int(arg.get_slice("=", 1)), 0, 2)
 		elif arg == "--smoke-ffa":
 			ffa = true
+		elif arg == "--smoke-fp":
+			smoke_fp = true
 
 
 func configure_from_settings() -> void:

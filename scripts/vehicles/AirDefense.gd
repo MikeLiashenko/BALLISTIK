@@ -39,6 +39,7 @@ var _missile_nodes: Array[Node3D] = []
 var _next_point: int = 0
 var _launcher_pitch: float = 0.0
 var _body_top: float = 2.0
+var _fp_height: float = -1.0
 
 
 func _build() -> void:
@@ -386,3 +387,25 @@ func _puppet_visuals(delta: float) -> void:
 		if is_instance_valid(n):
 			n.rotate_y(delta * float(r.get("speed", 2.0)))
 	_update_launcher(delta)
+
+
+## Вид от первого лица — место командира над крышей башни (башня не закрывает обзор).
+func first_person_point() -> Vector3:
+	if _fp_height < 0.0:
+		_fp_height = _model_top() + 0.45
+	var t := get_global_transform_interpolated()
+	var base := t.origin
+	if turret != null:
+		base = turret.get_global_transform_interpolated().origin
+	return base + t.basis.y * (_fp_height - (base - t.origin).dot(t.basis.y))
+
+
+## Высота верха модели (с башней и пусковыми) над основанием машины.
+func _model_top() -> float:
+	var top := _body_top
+	var inv := global_transform.affine_inverse()
+	for n in model.find_children("*", "VisualInstance3D", true, false):
+		var vi := n as VisualInstance3D
+		var box := inv * vi.global_transform * vi.get_aabb()
+		top = maxf(top, box.end.y)
+	return minf(top, _body_top + 4.5)

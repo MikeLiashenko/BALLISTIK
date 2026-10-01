@@ -39,6 +39,7 @@ var _torpedo_mounts: Array[Dictionary] = []
 var _sam_points: Array[Node3D] = []
 var _special_points: Array[Node3D] = []
 var _radars: Array = []
+var _body_aabb: AABB = AABB()
 var _wakes: Array[GPUParticles3D] = []
 var _angle: float = 0.0
 var _bob_time: float = 0.0
@@ -92,6 +93,7 @@ func _build() -> void:
 		wp.add_child(w)
 		_wakes.append(w)
 	var body: AABB = parts.get("body_aabb", AABB(Vector3(-6.0, -4.0, -50.0), Vector3(12.0, 16.0, 100.0)))
+	_body_aabb = body
 	_length = body.size.z
 	_beam = body.size.x
 	_deck = clampf(body.end.y * 0.45, 2.0, 12.0)
@@ -743,3 +745,10 @@ func _on_destroyed() -> void:
 	Effects.explosion(p + fwd * _length * 0.3 + Vector3(0.0, _deck, 0.0), 12.0 + _length * 0.06, true)
 	if model != null:
 		Effects.spawn_model_wreck(model, true, 26.0, _deck * 2.0 + 20.0)
+
+
+## Вид от первого лица — с мостика, вместе с качкой корпуса.
+func first_person_point() -> Vector3:
+	var a := _body_aabb
+	var eye := Vector3(0.0, maxf(a.end.y * 0.62, _deck + 5.0), a.position.z + a.size.z * 0.2)
+	return _hull.get_global_transform_interpolated() * eye

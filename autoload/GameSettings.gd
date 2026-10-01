@@ -33,6 +33,8 @@ var force_touch_cmdline: bool = false
 ## Позывной в сетевой игре и эпоха для онлайн-поиска боя.
 var player_name: String = ""
 var online_era: int = 0
+## Вид от первого лица (кабина, прицел наводчика, мостик) — запоминается между вылетами.
+var first_person: bool = false
 
 
 func _ready() -> void:
@@ -101,6 +103,7 @@ func load_settings() -> void:
 	mouse_sensitivity = float(cfg.get_value("controls", "mouse_sensitivity", mouse_sensitivity))
 	invert_y = bool(cfg.get_value("controls", "invert_y", invert_y))
 	aircraft_mouse_aim = bool(cfg.get_value("controls", "aircraft_mouse_aim", aircraft_mouse_aim))
+	first_person = bool(cfg.get_value("controls", "first_person", first_person))
 	touch_mode = int(cfg.get_value("controls", "touch_mode", touch_mode))
 	quality = int(cfg.get_value("video", "quality", quality))
 	fullscreen = bool(cfg.get_value("video", "fullscreen", fullscreen))
@@ -126,6 +129,7 @@ func save_settings() -> void:
 	cfg.set_value("controls", "mouse_sensitivity", mouse_sensitivity)
 	cfg.set_value("controls", "invert_y", invert_y)
 	cfg.set_value("controls", "aircraft_mouse_aim", aircraft_mouse_aim)
+	cfg.set_value("controls", "first_person", first_person)
 	cfg.set_value("controls", "touch_mode", touch_mode)
 	cfg.set_value("video", "quality", quality)
 	cfg.set_value("video", "fullscreen", fullscreen)
@@ -228,6 +232,7 @@ func _setup_input_map() -> void:
 	_add_keys("zoom", [KEY_Z])
 	_add_keys("radar_mode", [KEY_T])
 	_add_keys("camera_mode", [KEY_C])
+	_add_keys("view_first_person", [KEY_V])
 	_add_keys("scoreboard", [KEY_TAB])
 	_add_keys("pause", [KEY_ESCAPE, KEY_P])
 	_add_keys("help", [KEY_F1])

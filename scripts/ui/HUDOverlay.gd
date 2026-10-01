@@ -62,6 +62,8 @@ func _draw() -> void:
 	if v == null:
 		_draw_vignette()
 		return
+	if hud.rig.mode == CameraRig.Mode.FIRST_PERSON and v.category != GameDB.Category.AIR:
+		_draw_gunner_sight(center, hud.rig.zoomed)
 	# Перекрестье
 	var gap := 7.0
 	var arm := 12.0
@@ -205,3 +207,37 @@ func _draw_tactical_hint() -> void:
 	var pos := Vector2(size.x * 0.5 - w * 0.5, size.y - 70.0)
 	draw_rect(Rect2(pos - Vector2(16.0, 26.0), Vector2(w + 32.0, 38.0)), Color(0.02, 0.07, 0.11, 0.8))
 	draw_string(_font, pos, text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 18, Color(1.0, 0.8, 0.45))
+
+
+## Прицел наводчика (вид от первого лица у ПВО и флота): дальномерная сетка, а при зуме —
+## круглое поле оптического прицела с затемнением вокруг.
+func _draw_gunner_sight(center: Vector2, zoomed: bool) -> void:
+	var ink := Color(0.05, 0.05, 0.04, 0.85)
+	var glow := Color(1.0, 0.45, 0.15, 0.95)
+	var r := size.y * 0.46
+	if zoomed:
+		# Затемнение вне круга оптики (кольцо из толстых дуг) и бленда.
+		var thick := maxf(size.x, size.y)
+		draw_arc(center, r + thick * 0.5, 0.0, TAU, 96, Color(0.0, 0.0, 0.0, 0.94), thick, true)
+		draw_arc(center, r, 0.0, TAU, 96, Color(0.0, 0.0, 0.0, 0.55), 14.0, true)
+		draw_arc(center, r - 10.0, 0.0, TAU, 96, Color(0.15, 0.2, 0.22, 0.35), 3.0, true)
+	else:
+		draw_arc(center, r, 0.0, TAU, 96, Color(1.0, 1.0, 1.0, 0.08), 2.0, true)
+	var span := r * (0.92 if zoomed else 0.5)
+	# Толстые линии от края к центру (классическая сетка «пост»).
+	draw_line(center + Vector2(-span, 0), center + Vector2(-span * 0.18, 0), ink, 4.0)
+	draw_line(center + Vector2(span * 0.18, 0), center + Vector2(span, 0), ink, 4.0)
+	draw_line(center + Vector2(0, span), center + Vector2(0, span * 0.18), ink, 4.0)
+	# Угломерная шкала и дальномерные метки.
+	for i in range(-8, 9):
+		if i == 0:
+			continue
+		var x := span * 0.18 * 0.5 * i * 1.1
+		var h := 9.0 if i % 4 == 0 else 5.0
+		draw_line(center + Vector2(x, -h), center + Vector2(x, h), Color(ink, 0.8), 1.6)
+	for i in range(1, 5):
+		var y := span * 0.18 * i * 0.9
+		draw_line(center + Vector2(-14.0 + i * 2.0, y), center + Vector2(14.0 - i * 2.0, y), Color(ink, 0.8), 1.6)
+		draw_string(_font, center + Vector2(18.0, y + 5.0), str(i * 4), HORIZONTAL_ALIGNMENT_LEFT, -1.0, 12, Color(ink, 0.9))
+	# Светящийся угольник по центру.
+	draw_polyline(PackedVector2Array([center + Vector2(-10, 12), center, center + Vector2(10, 12)]), glow, 2.0, true)

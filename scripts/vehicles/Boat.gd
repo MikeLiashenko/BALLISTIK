@@ -39,6 +39,7 @@ var _salvo_timer: float = 0.0
 var _salvo_point: Vector3 = Vector3.ZERO
 var _length: float = 10.0
 var _radars: Array = []
+var _body_aabb: AABB = AABB()
 
 
 func _build() -> void:
@@ -67,6 +68,7 @@ func _build() -> void:
 		wp.add_child(w)
 		_wakes.append(w)
 	var body: AABB = parts.get("body_aabb", AABB(Vector3(-2.0, -1.0, -5.0), Vector3(4.0, 3.0, 10.0)))
+	_body_aabb = body
 	_length = body.size.z
 	_add_box_collision(Vector3(maxf(body.size.x, 2.5), maxf(body.size.y, 2.5), body.size.z + 2.0), body.get_center())
 	for m: Dictionary in _mounts:
@@ -441,3 +443,10 @@ func _on_destroyed() -> void:
 	Effects.explosion(global_position + Vector3(0.0, 1.0, 0.0), 12.0 + _length * 0.2, true)
 	if model != null:
 		Effects.spawn_model_wreck(model, true)
+
+
+## Вид от первого лица — с ходового поста, вместе с качкой корпуса.
+func first_person_point() -> Vector3:
+	var a := _body_aabb
+	var eye := Vector3(0.0, maxf(a.end.y * 0.8, 1.9), a.position.z + a.size.z * 0.4)
+	return _hull.get_global_transform_interpolated() * eye

@@ -31,6 +31,7 @@ var _arc_material: StandardMaterial3D = null
 var _arc_timer: float = 0.0
 var _marker_blast_radius: float = 38.0
 var _marker_text: String = ""
+var _third_person_mode: int = CameraRig.Mode.ORBIT
 
 
 func setup(p_level: BattleLevel, p_rig: CameraRig, p_hud: HUD) -> void:
@@ -64,6 +65,10 @@ func possess(v: Vehicle, bot_driven: bool) -> void:
 	var cam_mode := CameraRig.Mode.ORBIT
 	if v.category == GameDB.Category.AIR and not GameSettings.aircraft_mouse_aim and not is_touch():
 		cam_mode = CameraRig.Mode.CHASE
+	rig.fp_mouse_aim = cam_mode == CameraRig.Mode.ORBIT
+	_third_person_mode = cam_mode
+	if (GameSettings.first_person and not bot_driven) or GlobalBattleManager.smoke_fp:
+		cam_mode = CameraRig.Mode.FIRST_PERSON
 	rig.follow(v, cam_mode)
 	v.destroyed.connect(_on_vehicle_destroyed, CONNECT_ONE_SHOT)
 	update_mouse_mode()
@@ -131,9 +136,17 @@ func _unhandled_input(event: InputEvent) -> void:
 		tactical_launch()
 	elif event.is_action_pressed("fire_primary") and tactical_active and not (event is InputEventMouseButton):
 		tactical_launch()
+	elif event.is_action_pressed("view_first_person") and not tactical_active:
+		toggle_first_person()
 	elif event.is_action_pressed("camera_mode") and vehicle.category == GameDB.Category.AIR:
-		var new_mode := CameraRig.Mode.CHASE if rig.mode == CameraRig.Mode.ORBIT else CameraRig.Mode.ORBIT
-		rig.follow(vehicle, new_mode)
+		if rig.mode == CameraRig.Mode.FIRST_PERSON:
+			rig.fp_mouse_aim = not rig.fp_mouse_aim
+			rig.set_first_person(true)
+		else:
+			var new_mode := CameraRig.Mode.CHASE if rig.mode == CameraRig.Mode.ORBIT else CameraRig.Mode.ORBIT
+			_third_person_mode = new_mode
+			rig.fp_mouse_aim = new_mode == CameraRig.Mode.ORBIT
+			rig.follow(vehicle, new_mode)
 
 
 func _physics_process(delta: float) -> void:
@@ -180,7 +193,7 @@ func _apply_look(delta: float) -> void:
 		d += t.consume_look_delta() * 1.6
 	var joy := Input.get_vector("look_left", "look_right", "look_up", "look_down")
 	var invert := -1.0 if GameSettings.invert_y else 1.0
-	if rig.mode == CameraRig.Mode.CHASE:
+	if _stick_mode():
 		_stick += Vector2(d.x, d.y * invert) * sens * 3.0
 		_stick = _stick.limit_length(1.0).move_toward(Vector2.ZERO, delta * 1.6)
 		return
@@ -211,13 +224,13 @@ func _drive_aircraft(c: VehicleControls, delta: float) -> void:
 		var s := t.stick_vector()
 		roll += s.x
 		pitch += s.y
-	if rig.mode == CameraRig.Mode.CHASE:
+	if _stick_mode():
 		roll += _stick.x
 		pitch += -_stick.y
 	c.roll = clampf(roll, -1.0, 1.0)
 	c.pitch = clampf(pitch, -1.0, 1.0)
 	c.yaw = clampf(yaw, -1.0, 1.0)
-	c.use_autopilot = rig.mode == CameraRig.Mode.ORBIT
+	c.use_autopilot = rig.mode == CameraRig.Mode.ORBIT or (rig.mode == CameraRig.Mode.FIRST_PERSON and rig.fp_mouse_aim)
 	c.fly_target = rig.camera.global_position + rig.get_look_direction() * 2500.0
 	c.fire_primary = _held("fire_primary", "fire")
 	c.fire_secondary = _held("fire_secondary", "secondary")
@@ -435,3 +448,29 @@ func _rebuild_arc(origin: Vector3, in_range: bool) -> void:
 		_arc_mesh.surface_add_vertex(p - side)
 		_arc_mesh.surface_add_vertex(p + side)
 	_arc_mesh.surface_end()
+
+
+# --- Вид от первого лица -----------------------------------------------------------------------------------
+## Самолёт управляется «виртуальной ручкой» от мыши (CHASE или кабина без мышь-наведения).
+func _stick_mode() -> bool:
+	if rig.mode == CameraRig.Mode.CHASE:
+		return true
+	return rig.mode == CameraRig.Mode.FIRST_PERSON and not rig.fp_mouse_aim and has_vehicle() and vehicle.category == GameDB.Category.AIR
+
+
+## V / кнопка «ВИД»: от первого лица (кабина, прицел наводчика, мостик) ↔ от третьего.
+func toggle_first_person() -> void:
+	if not has_vehicle() or tactical_active:
+		return
+	var on := rig.mode != CameraRig.Mode.FIRST_PERSON
+	GameSettings.first_person = on
+	GameSettings.save_settings()
+	if on:
+		if rig.mode == CameraRig.Mode.CHASE or rig.mode == CameraRig.Mode.ORBIT:
+			_third_person_mode = rig.mode
+		rig.set_first_person(true)
+	else:
+		rig.set_first_person(false, _third_person_mode)
+	_stick = Vector2.ZERO
+	if hud != null:
+		hud.show_message("ВИД ОТ ПЕРВОГО ЛИЦА" if on else "ВИД ОТ ТРЕТЬЕГО ЛИЦА", UITheme.NEON, 1.2)

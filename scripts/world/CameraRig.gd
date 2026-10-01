@@ -6,10 +6,13 @@ extends Node3D
 ##  * CHASE    — жёсткая камера за самолётом при прямом управлении;
 ##  * TACTICAL — наклонный вид сверху на карту для баллистического прицеливания;
 ##  * DEATH    — облёт места гибели;
-##  * OVERVIEW — общий план арены.
+##  * OVERVIEW — общий план арены;
+##  * FIRST_PERSON — вид от первого лица: из кабины самолёта (с приборной доской), с места наводчика
+##               ПВО или с мостика корабля (с качкой). Мышь у самолёта — как в ORBIT (самолёт летит
+##               туда, куда смотрит пилот) или как в CHASE (виртуальная ручка), см. fp_mouse_aim.
 ## Камера обновляется в _process по интерполированным трансформам техники и трясётся от взрывов.
 
-enum Mode { ORBIT, CHASE, TACTICAL, DEATH, OVERVIEW }
+enum Mode { ORBIT, CHASE, TACTICAL, DEATH, OVERVIEW, FIRST_PERSON }
 
 var mode: int = Mode.OVERVIEW
 var camera: Camera3D = null
@@ -21,6 +24,8 @@ var zoomed: bool = false
 var tactical_center: Vector3 = Vector3.ZERO
 var tactical_size: float = 4000.0
 var focus_point: Vector3 = Vector3.ZERO
+## Вид из кабины: самолёт летит туда, куда смотрит пилот (иначе мышь — виртуальная ручка).
+var fp_mouse_aim: bool = true
 
 var _mode_before_tactical: int = Mode.ORBIT
 var _trauma: float = 0.0
@@ -29,6 +34,8 @@ var _death_angle: float = 0.0
 var _overview_angle: float = 0.0
 var _chase_basis: Basis = Basis()
 var _tactical_distance: float = 4000.0
+var _fp_basis: Basis = Basis()
+var _fp_shake: float = 0.0
 
 
 func _ready() -> void:
@@ -71,8 +78,9 @@ func follow(v: Vehicle, new_mode: int) -> void:
 	target = v
 	mode = new_mode
 	if v != null:
-		set_look_from_direction(v.get_forward() + Vector3(0.0, -0.12, 0.0))
+		set_look_from_direction(v.get_forward() + Vector3(0.0, -0.12 if new_mode != Mode.FIRST_PERSON else -0.02, 0.0))
 		_chase_basis = v.global_basis.orthonormalized()
+		_fp_basis = _chase_basis
 
 
 func _valid_target() -> bool:
@@ -82,6 +90,8 @@ func _valid_target() -> bool:
 func _process(delta: float) -> void:
 	_trauma = maxf(_trauma - delta * 1.4, 0.0)
 	_noise_t += delta * 38.0
+	_sync_cockpit()
+	camera.near = (0.03 if _is_air() else 0.15) if mode == Mode.FIRST_PERSON else 0.5
 	match mode:
 		Mode.ORBIT:
 			_update_orbit()
@@ -91,10 +101,14 @@ func _process(delta: float) -> void:
 			_update_tactical(delta)
 		Mode.DEATH:
 			_update_death(delta)
+		Mode.FIRST_PERSON:
+			_update_first_person(delta)
 		_:
 			_update_overview(delta)
 	if mode != Mode.TACTICAL:
 		var target_fov := 30.0 if zoomed else 70.0
+		if mode == Mode.FIRST_PERSON:
+			target_fov = (18.0 if zoomed else 74.0) if not _is_air() else (40.0 if zoomed else 78.0)
 		if _valid_target() and target.category == GameDB.Category.AIR and not zoomed:
 			target_fov += clampf((target.speed - 150.0) * 0.06, 0.0, 8.0)
 		camera.fov = lerpf(camera.fov, target_fov, clampf(delta * 8.0, 0.0, 1.0))
@@ -187,7 +201,8 @@ func _apply_shake() -> void:
 	if _trauma <= 0.001:
 		return
 	var s := _trauma * _trauma
-	var off := Vector3(sin(_noise_t * 1.3), sin(_noise_t * 1.7 + 1.2), 0.0) * s * 0.9
+	var k := 0.12 if mode == Mode.FIRST_PERSON else 1.0
+	var off := Vector3(sin(_noise_t * 1.3), sin(_noise_t * 1.7 + 1.2), 0.0) * s * 0.9 * k
 	camera.global_position += camera.global_basis * off
 	camera.rotate_object_local(Vector3.FORWARD, sin(_noise_t * 1.1) * s * 0.03)
 
@@ -210,3 +225,62 @@ func center_aim_point(max_dist: float = 6000.0) -> Vector3:
 		if bool(hit["hit"]):
 			return hit["position"]
 	return origin + dir * 3000.0
+
+
+# --- Вид от первого лица -----------------------------------------------------------------------------------
+var _cockpit_owner: Aircraft = null
+
+
+func _is_air() -> bool:
+	return _valid_target() and target.category == GameDB.Category.AIR
+
+
+## Вход в вид от первого лица (или выход в прежний режим).
+func set_first_person(on: bool, fallback_mode: int = Mode.ORBIT) -> void:
+	if on:
+		mode = Mode.FIRST_PERSON
+		if _valid_target():
+			_fp_basis = target.get_global_transform_interpolated().basis.orthonormalized()
+	elif mode == Mode.FIRST_PERSON:
+		mode = fallback_mode
+		if _valid_target():
+			_chase_basis = target.global_basis.orthonormalized()
+
+
+## Кабина видна только у своего самолёта в виде от первого лица.
+func _sync_cockpit() -> void:
+	var want: Aircraft = null
+	if mode == Mode.FIRST_PERSON and _valid_target() and target is Aircraft:
+		want = target as Aircraft
+	if want == _cockpit_owner:
+		return
+	if _cockpit_owner != null and is_instance_valid(_cockpit_owner):
+		_cockpit_owner.set_cockpit_visible(false)
+	_cockpit_owner = want
+	if want != null:
+		want.set_cockpit_visible(true)
+
+
+func _update_first_person(delta: float) -> void:
+	if not _valid_target():
+		return
+	var eye := target.first_person_point()
+	if target is Aircraft:
+		var a := target as Aircraft
+		var t := a.get_global_transform_interpolated()
+		if fp_mouse_aim:
+			# Взгляд — куда ведёт мышь, горизонт кренится вместе с самолётом.
+			camera.global_basis = GameDB.basis_from_forward(get_look_direction(), t.basis.y)
+		else:
+			_fp_basis = _fp_basis.slerp(t.basis.orthonormalized(), clampf(delta * 14.0, 0.0, 1.0)).orthonormalized()
+			camera.global_basis = _fp_basis
+			set_look_from_direction(-_fp_basis.z)
+		# Дрожь от двигателя, перегрузки и стрельбы.
+		var vib := 0.0012 + a.throttle * 0.0016 + absf(a.stick_input.x) * a.speed * 0.00002
+		if a.controls.fire_primary:
+			vib += 0.0035
+		eye += camera.global_basis * Vector3(sin(_noise_t * 2.3), sin(_noise_t * 3.1 + 0.7), 0.0) * vib
+		camera.global_position = eye
+	else:
+		camera.global_position = eye
+		camera.global_basis = GameDB.basis_from_forward(get_look_direction())

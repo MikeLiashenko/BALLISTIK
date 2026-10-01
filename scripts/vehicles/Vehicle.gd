@@ -539,3 +539,9 @@ func _net_puppet_step(delta: float) -> void:
 ## Анимация марионетки: башни, винты, кильватер, антенны — без физики и стрельбы.
 func _puppet_visuals(_delta: float) -> void:
 	pass
+
+
+# --- Вид от первого лица -----------------------------------------------------------------------------------
+## Мировая точка камеры вида от первого лица (кабина, место наводчика, мостик).
+func first_person_point() -> Vector3:
+	return get_global_transform_interpolated() * Vector3(0.0, 2.6, 0.0)
